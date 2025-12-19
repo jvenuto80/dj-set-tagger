@@ -1,0 +1,194 @@
+import { useEffect } from 'react'
+import { useQuery, useMutation } from '@tanstack/react-query'
+import { Link } from 'react-router-dom'
+import { 
+  FolderSearch, 
+  Play, 
+  Square, 
+  CheckCircle,
+  AlertCircle,
+  Loader2
+} from 'lucide-react'
+import { startScan, getScanStatus, stopScan, getSettings } from '../api'
+
+function Scan() {
+  const { data: settings } = useQuery({
+    queryKey: ['settings'],
+    queryFn: getSettings,
+  })
+
+  const { data: status, refetch: refetchStatus } = useQuery({
+    queryKey: ['scan-status'],
+    queryFn: getScanStatus,
+    refetchInterval: (data) => data?.running ? 1000 : false,
+  })
+
+  const startMutation = useMutation({
+    mutationFn: startScan,
+    onSuccess: () => {
+      refetchStatus()
+    },
+  })
+
+  const stopMutation = useMutation({
+    mutationFn: stopScan,
+    onSuccess: () => {
+      refetchStatus()
+    },
+  })
+
+  const progress = status?.total > 0 
+    ? Math.round((status.progress / status.total) * 100) 
+    : 0
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-3xl font-bold">Scan Library</h1>
+        <p className="text-gray-400 mt-1">
+          Scan your music directory for audio files
+        </p>
+      </div>
+
+      {/* Current Directory */}
+      <div className="bg-gray-800 rounded-xl p-6 border border-gray-700">
+        <h2 className="text-lg font-semibold mb-4">Scan Directory</h2>
+        <div className="flex items-center gap-4">
+          <FolderSearch className="w-6 h-6 text-gray-400" />
+          <div className="flex-1">
+            <p className="font-medium">{settings?.music_dir || '/music'}</p>
+            <p className="text-sm text-gray-400">
+              Scanning for: {settings?.scan_extensions?.join(', ') || 'mp3, flac, wav, m4a, aac, ogg'}
+            </p>
+          </div>
+          <Link 
+            to="/settings"
+            className="text-primary-500 hover:text-primary-400 text-sm"
+          >
+            Change
+          </Link>
+        </div>
+      </div>
+
+      {/* Scan Status */}
+      <div className="bg-gray-800 rounded-xl p-6 border border-gray-700">
+        <h2 className="text-lg font-semibold mb-4">Scan Status</h2>
+        
+        {status?.running ? (
+          <div className="space-y-4">
+            <div className="flex items-center gap-3">
+              <Loader2 className="w-5 h-5 text-primary-500 animate-spin" />
+              <span>Scanning in progress...</span>
+            </div>
+            
+            {/* Progress Bar */}
+            <div className="relative h-4 bg-gray-700 rounded-full overflow-hidden">
+              <div 
+                className="absolute inset-y-0 left-0 bg-primary-500 transition-all duration-300"
+                style={{ width: `${progress}%` }}
+              />
+              <div className="absolute inset-0 flex items-center justify-center text-xs font-medium">
+                {progress}%
+              </div>
+            </div>
+            
+            {/* Current File */}
+            {status.current_file && (
+              <p className="text-sm text-gray-400 truncate">
+                Current: {status.current_file}
+              </p>
+            )}
+            
+            {/* Stats */}
+            <div className="grid grid-cols-3 gap-4 text-center">
+              <div className="bg-gray-700/50 rounded-lg p-3">
+                <p className="text-2xl font-bold">{status.files_found || 0}</p>
+                <p className="text-sm text-gray-400">Found</p>
+              </div>
+              <div className="bg-gray-700/50 rounded-lg p-3">
+                <p className="text-2xl font-bold text-green-500">{status.files_added || 0}</p>
+                <p className="text-sm text-gray-400">Added</p>
+              </div>
+              <div className="bg-gray-700/50 rounded-lg p-3">
+                <p className="text-2xl font-bold text-gray-400">{status.files_skipped || 0}</p>
+                <p className="text-sm text-gray-400">Skipped</p>
+              </div>
+            </div>
+            
+            <button
+              onClick={() => stopMutation.mutate()}
+              disabled={stopMutation.isPending}
+              className="w-full px-4 py-2 bg-red-600 hover:bg-red-700 rounded-lg flex items-center justify-center gap-2"
+            >
+              <Square className="w-4 h-4" />
+              Stop Scan
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {status?.files_added > 0 ? (
+              <div className="flex items-center gap-3 text-green-500">
+                <CheckCircle className="w-5 h-5" />
+                <span>Last scan completed: {status.files_added} files added</span>
+              </div>
+            ) : status?.errors?.length > 0 ? (
+              <div className="flex items-center gap-3 text-red-500">
+                <AlertCircle className="w-5 h-5" />
+                <span>Scan completed with errors</span>
+              </div>
+            ) : (
+              <div className="flex items-center gap-3 text-gray-400">
+                <FolderSearch className="w-5 h-5" />
+                <span>Ready to scan</span>
+              </div>
+            )}
+            
+            <button
+              onClick={() => startMutation.mutate(settings?.music_dir)}
+              disabled={startMutation.isPending}
+              className="w-full px-4 py-2 bg-primary-600 hover:bg-primary-700 rounded-lg flex items-center justify-center gap-2 disabled:opacity-50"
+            >
+              <Play className="w-4 h-4" />
+              {startMutation.isPending ? 'Starting...' : 'Start Scan'}
+            </button>
+          </div>
+        )}
+        
+        {/* Errors */}
+        {status?.errors?.length > 0 && (
+          <div className="mt-4 p-4 bg-red-500/10 border border-red-500/30 rounded-lg">
+            <h3 className="font-medium text-red-400 mb-2">Errors ({status.errors.length})</h3>
+            <ul className="text-sm text-gray-400 space-y-1 max-h-32 overflow-auto">
+              {status.errors.map((error, i) => (
+                <li key={i} className="truncate">{error}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+
+      {/* Next Steps */}
+      {!status?.running && status?.files_added > 0 && (
+        <div className="bg-gray-800 rounded-xl p-6 border border-gray-700">
+          <h2 className="text-lg font-semibold mb-4">Next Steps</h2>
+          <div className="flex gap-4">
+            <Link
+              to="/tracks"
+              className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg"
+            >
+              View Tracks
+            </Link>
+            <Link
+              to="/tracks?status=pending"
+              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg"
+            >
+              Start Matching
+            </Link>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+export default Scan

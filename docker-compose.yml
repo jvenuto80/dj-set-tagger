@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  dj-set-tagger:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: dj-set-tagger
+    restart: unless-stopped
+    ports:
+      - "8080:8080"    # Web UI
+      - "5000:5000"    # API
+    volumes:
+      - ./config:/config
+      - /mnt/user/media/music/dj-sets:/music  # Adjust this path for your Unraid setup
+    environment:
+      - MUSIC_DIR=/music
+      - CONFIG_DIR=/config
+      - SCAN_EXTENSIONS=mp3,flac,wav,m4a,aac,ogg
+      - TZ=America/New_York
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s

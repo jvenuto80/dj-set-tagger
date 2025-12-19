@@ -1,0 +1,40 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>dj-set-tagger</Name>
+  <Repository>ghcr.io/yourusername/dj-set-tagger:latest</Repository>
+  <Registry>https://ghcr.io/yourusername/dj-set-tagger</Registry>
+  <Network>bridge</Network>
+  <MyIP/>
+  <Shell>bash</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/yourusername/dj-set-tagger/issues</Support>
+  <Project>https://github.com/yourusername/dj-set-tagger</Project>
+  <Overview>
+    DJ Set Tagger - Automatically tag DJ sets and electronic music using 1001Tracklists metadata.
+    
+    Features:
+    - Scan directories for audio files
+    - Fuzzy matching against 1001Tracklists database
+    - Automatic metadata tagging (artist, title, genre, cover art)
+    - Web interface for reviewing and applying matches
+    - Batch operations for mass renaming/tagging
+  </Overview>
+  <Category>MediaApp:Music</Category>
+  <WebUI>http://[IP]:[PORT:8080]</WebUI>
+  <TemplateURL>https://raw.githubusercontent.com/yourusername/dj-set-tagger/main/unraid/dj-set-tagger.xml</TemplateURL>
+  <Icon>https://raw.githubusercontent.com/yourusername/dj-set-tagger/main/frontend/public/favicon.svg</Icon>
+  <ExtraParams/>
+  <PostArgs/>
+  <CPUset/>
+  <DateInstalled></DateInstalled>
+  <DonateText/>
+  <DonateLink/>
+  <Requires/>
+  <Config Name="Web UI Port" Target="8080" Default="8080" Mode="tcp" Description="Web interface port" Type="Port" Display="always" Required="true" Mask="false">8080</Config>
+  <Config Name="API Port" Target="5000" Default="5000" Mode="tcp" Description="API port" Type="Port" Display="always" Required="true" Mask="false">5000</Config>
+  <Config Name="Music Directory" Target="/music" Default="/mnt/user/media/music/dj-sets" Mode="rw" Description="Path to your DJ sets and music files" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/media/music/dj-sets</Config>
+  <Config Name="Config Directory" Target="/config" Default="/mnt/user/appdata/dj-set-tagger" Mode="rw" Description="App configuration and database storage" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/dj-set-tagger</Config>
+  <Config Name="PUID" Target="PUID" Default="99" Mode="" Description="User ID" Type="Variable" Display="advanced" Required="false" Mask="false">99</Config>
+  <Config Name="PGID" Target="PGID" Default="100" Mode="" Description="Group ID" Type="Variable" Display="advanced" Required="false" Mask="false">100</Config>
+  <Config Name="TZ" Target="TZ" Default="America/New_York" Mode="" Description="Timezone" Type="Variable" Display="advanced" Required="false" Mask="false">America/New_York</Config>
+</Container>
