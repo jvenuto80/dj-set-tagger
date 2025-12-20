@@ -1,5 +1,5 @@
-import { useEffect } from 'react'
-import { useQuery, useMutation } from '@tanstack/react-query'
+import { useEffect, useState } from 'react'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { 
   FolderSearch, 
@@ -12,6 +12,9 @@ import {
 import { startScan, getScanStatus, stopScan, getSettings } from '../api'
 
 function Scan() {
+  const queryClient = useQueryClient()
+  const [isScanning, setIsScanning] = useState(false)
+
   const { data: settings } = useQuery({
     queryKey: ['settings'],
     queryFn: getSettings,
@@ -20,12 +23,25 @@ function Scan() {
   const { data: status, refetch: refetchStatus } = useQuery({
     queryKey: ['scan-status'],
     queryFn: getScanStatus,
-    refetchInterval: (data) => data?.running ? 1000 : false,
+    refetchInterval: isScanning ? 500 : false,
   })
+
+  // Sync local state with server state
+  useEffect(() => {
+    if (status?.running === false && isScanning) {
+      // Scan just finished
+      setIsScanning(false)
+      queryClient.invalidateQueries(['tracks'])
+    } else if (status?.running === true && !isScanning) {
+      // Scan started externally
+      setIsScanning(true)
+    }
+  }, [status?.running, isScanning, queryClient])
 
   const startMutation = useMutation({
     mutationFn: startScan,
     onSuccess: () => {
+      setIsScanning(true)
       refetchStatus()
     },
   })
@@ -33,6 +49,7 @@ function Scan() {
   const stopMutation = useMutation({
     mutationFn: stopScan,
     onSuccess: () => {
+      setIsScanning(false)
       refetchStatus()
     },
   })
@@ -40,6 +57,9 @@ function Scan() {
   const progress = status?.total > 0 
     ? Math.round((status.progress / status.total) * 100) 
     : 0
+
+  // Determine if we should show running state (use server status as source of truth)
+  const showRunning = status?.running === true
 
   return (
     <div className="space-y-6">
@@ -50,22 +70,30 @@ function Scan() {
         </p>
       </div>
 
-      {/* Current Directory */}
+      {/* Current Directories */}
       <div className="bg-gray-800 rounded-xl p-6 border border-gray-700">
-        <h2 className="text-lg font-semibold mb-4">Scan Directory</h2>
-        <div className="flex items-center gap-4">
-          <FolderSearch className="w-6 h-6 text-gray-400" />
-          <div className="flex-1">
-            <p className="font-medium">{settings?.music_dir || '/music'}</p>
-            <p className="text-sm text-gray-400">
-              Scanning for: {settings?.scan_extensions?.join(', ') || 'mp3, flac, wav, m4a, aac, ogg'}
-            </p>
-          </div>
+        <h2 className="text-lg font-semibold mb-4">Scan Directories</h2>
+        <div className="space-y-3">
+          {(settings?.music_dirs || [settings?.music_dir || '/music']).map((dir, index) => (
+            <div key={index} className="flex items-center gap-4">
+              <FolderSearch className="w-6 h-6 text-gray-400" />
+              <div className="flex-1">
+                <p className="font-medium">{dir}</p>
+                {index === 0 && (
+                  <p className="text-sm text-gray-400">
+                    Scanning for: {settings?.scan_extensions?.join(', ') || 'mp3, flac, wav, m4a, aac, ogg'}
+                  </p>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="mt-4 pt-4 border-t border-gray-700">
           <Link 
             to="/settings"
             className="text-primary-500 hover:text-primary-400 text-sm"
           >
-            Change
+            Manage Directories
           </Link>
         </div>
       </div>
@@ -74,7 +102,7 @@ function Scan() {
       <div className="bg-gray-800 rounded-xl p-6 border border-gray-700">
         <h2 className="text-lg font-semibold mb-4">Scan Status</h2>
         
-        {status?.running ? (
+        {showRunning ? (
           <div className="space-y-4">
             <div className="flex items-center gap-3">
               <Loader2 className="w-5 h-5 text-primary-500 animate-spin" />
@@ -126,10 +154,45 @@ function Scan() {
           </div>
         ) : (
           <div className="space-y-4">
-            {status?.files_added > 0 ? (
-              <div className="flex items-center gap-3 text-green-500">
-                <CheckCircle className="w-5 h-5" />
-                <span>Last scan completed: {status.files_added} files added</span>
+            {/* Show last scan results if we have any data */}
+            {(status?.files_found > 0 || status?.files_added > 0 || status?.files_skipped > 0) ? (
+              <div className="space-y-4">
+                <div className="flex items-center gap-3 text-green-500">
+                  <CheckCircle className="w-5 h-5" />
+                  <span>Scan completed</span>
+                </div>
+                
+                {/* Results Stats */}
+                <div className="grid grid-cols-4 gap-3 text-center">
+                  <div className="bg-gray-700/50 rounded-lg p-3">
+                    <p className="text-xl font-bold">{status.files_found || 0}</p>
+                    <p className="text-xs text-gray-400">Found</p>
+                  </div>
+                  <div className="bg-gray-700/50 rounded-lg p-3">
+                    <p className="text-xl font-bold text-green-500">{status.files_added || 0}</p>
+                    <p className="text-xs text-gray-400">Added</p>
+                  </div>
+                  <div className="bg-gray-700/50 rounded-lg p-3">
+                    <p className="text-xl font-bold text-gray-400">{status.files_skipped || 0}</p>
+                    <p className="text-xs text-gray-400">Skipped</p>
+                  </div>
+                  <div className="bg-gray-700/50 rounded-lg p-3">
+                    <p className="text-xl font-bold text-yellow-500">{status.files_filtered || 0}</p>
+                    <p className="text-xs text-gray-400">Filtered</p>
+                  </div>
+                </div>
+                
+                {status.files_skipped > 0 && status.files_added === 0 && (
+                  <p className="text-sm text-gray-400">
+                    All files were already in the database. Scan a different directory or clear database to re-scan.
+                  </p>
+                )}
+                
+                {status.files_filtered > 0 && (
+                  <p className="text-sm text-gray-400">
+                    {status.files_filtered} files were filtered due to minimum duration setting.
+                  </p>
+                )}
               </div>
             ) : status?.errors?.length > 0 ? (
               <div className="flex items-center gap-3 text-red-500">
@@ -168,7 +231,7 @@ function Scan() {
       </div>
 
       {/* Next Steps */}
-      {!status?.running && status?.files_added > 0 && (
+      {!showRunning && (status?.files_added > 0 || status?.files_skipped > 0) && (
         <div className="bg-gray-800 rounded-xl p-6 border border-gray-700">
           <h2 className="text-lg font-semibold mb-4">Next Steps</h2>
           <div className="flex gap-4">

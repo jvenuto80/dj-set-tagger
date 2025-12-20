@@ -1,11 +1,11 @@
 """
 Track database model and Pydantic schemas
 """
-from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, Text
+from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, Text, JSON, Boolean
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from pydantic import BaseModel, ConfigDict
-from typing import Optional, List
+from typing import Optional, List, Any
 from backend.services.database import Base
 
 
@@ -32,7 +32,7 @@ class Track(Base):
     bitrate = Column(Integer, nullable=True)
     sample_rate = Column(Integer, nullable=True)
     
-    # Matched metadata (from 1001tracklists)
+    # Matched metadata (from tracklist search)
     matched_title = Column(String, nullable=True)
     matched_artist = Column(String, nullable=True)
     matched_album = Column(String, nullable=True)
@@ -43,10 +43,12 @@ class Track(Base):
     matched_dj = Column(String, nullable=True)
     matched_event = Column(String, nullable=True)
     match_confidence = Column(Float, nullable=True)  # 0-100
+    match_source = Column(String, nullable=True)  # "google", "1001tracklists", etc.
     
     # Status tracking
     status = Column(String, default="pending")  # pending, matched, tagged, error
     error_message = Column(Text, nullable=True)
+    series_tagged = Column(Boolean, default=False)  # True if tagged via Series page
     
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -58,7 +60,7 @@ class Track(Base):
 
 
 class MatchCandidate(Base):
-    """SQLAlchemy model for match candidates from 1001tracklists"""
+    """SQLAlchemy model for match candidates from tracklist search"""
     __tablename__ = "match_candidates"
     
     id = Column(Integer, primary_key=True, index=True)
@@ -74,10 +76,15 @@ class MatchCandidate(Base):
     dj = Column(String, nullable=True)
     event = Column(String, nullable=True)
     date_recorded = Column(String, nullable=True)
+    source = Column(String, nullable=True)  # "google", "1001tracklists", "mixesdb", etc.
+    
+    # Extracted tracks from this tracklist (stored as JSON)
+    extracted_tracks = Column(JSON, nullable=True)  # List of {position, artist, title, time}
+    num_tracks = Column(Integer, nullable=True)
     
     # Confidence score
     confidence = Column(Float, nullable=False)  # 0-100
-    match_type = Column(String, nullable=True)  # "filename", "metadata", "fuzzy"
+    match_type = Column(String, nullable=True)  # "google_search", "1001tracklists_direct", etc.
     
     created_at = Column(DateTime, default=datetime.utcnow)
     
@@ -145,7 +152,10 @@ class TrackUpdate(BaseModel):
     year: Optional[str] = None
     matched_title: Optional[str] = None
     matched_artist: Optional[str] = None
+    matched_album: Optional[str] = None
     matched_genre: Optional[str] = None
+    matched_year: Optional[str] = None
+    matched_cover_url: Optional[str] = None
     status: Optional[str] = None
 
 
@@ -163,6 +173,9 @@ class MatchResult(BaseModel):
     dj: Optional[str] = None
     event: Optional[str] = None
     date_recorded: Optional[str] = None
+    source: Optional[str] = None
+    extracted_tracks: Optional[List[Any]] = None
+    num_tracks: Optional[int] = None
     confidence: float
     match_type: Optional[str] = None
 

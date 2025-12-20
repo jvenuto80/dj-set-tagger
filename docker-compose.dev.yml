@@ -8,13 +8,13 @@ services:
     container_name: dj-set-tagger-dev
     ports:
       - "8080:8080"    # Web UI
-      - "5000:5000"    # API
+      - "5001:5000"    # API (mapped to 5001 on host)
     volumes:
       - ./config:/config
-      - ./test-music:/music  # Local test music folder
+      - /Volumes/Media/Music:/music  # SMB share from 10.0.30.159
+      - /Volumes/Media/radio:/radio  # Radio recordings mount
       - ./backend:/app/backend  # Hot reload for backend
     environment:
       - MUSIC_DIR=/music
       - CONFIG_DIR=/config
-      - SCAN_EXTENSIONS=mp3,flac,wav,m4a,aac,ogg
       - TZ=America/New_York

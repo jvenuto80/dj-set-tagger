@@ -126,4 +126,28 @@ export const listDirectories = async (path = '/') => {
   return data
 }
 
+// Cover Art
+export const searchCoverArt = async (trackId, query) => {
+  const { data } = await api.get(`/tracks/${trackId}/cover-options`, { params: { query } })
+  return data
+}
+
+export const updateTrackCover = async (trackId, coverUrl) => {
+  const { data } = await api.patch(`/tracks/${trackId}`, { matched_cover_url: coverUrl })
+  return data
+}
+
+// Series Detection
+export const detectSeries = async () => {
+  const { data } = await api.get('/tracks/series/detect')
+  return data
+}
+
+export const applySeriesAlbum = async (trackIds, album, artist = null) => {
+  const { data } = await api.post('/tracks/series/apply-album', trackIds, { 
+    params: { album, artist } 
+  })
+  return data
+}
+
 export default api

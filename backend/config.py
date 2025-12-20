@@ -23,7 +23,10 @@ class Settings(BaseSettings):
     tracklists_delay: float = 2.0  # Delay between requests to avoid rate limiting
     
     # Matching settings
-    fuzzy_threshold: int = 70  # Minimum fuzzy match score (0-100)
+    fuzzy_threshold: int = 50  # Minimum fuzzy match score (0-100)
+    
+    # Filter settings
+    min_duration_minutes: int = 0  # Minimum track duration in minutes (0 = no filter)
     
     class Config:
         env_prefix = ""

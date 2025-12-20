@@ -4,6 +4,7 @@ import Dashboard from './pages/Dashboard'
 import Tracks from './pages/Tracks'
 import TrackDetail from './pages/TrackDetail'
 import Scan from './pages/Scan'
+import Series from './pages/Series'
 import Settings from './pages/Settings'
 
 function App() {
@@ -14,6 +15,7 @@ function App() {
         <Route path="/tracks" element={<Tracks />} />
         <Route path="/tracks/:id" element={<TrackDetail />} />
         <Route path="/scan" element={<Scan />} />
+        <Route path="/series" element={<Series />} />
         <Route path="/settings" element={<Settings />} />
       </Routes>
     </Layout>

@@ -14,18 +14,22 @@ router = APIRouter()
 
 class AppSettings(BaseModel):
     """Application settings model"""
-    music_dir: str
+    music_dir: str  # Legacy single directory (first in list)
+    music_dirs: List[str]  # Multiple directories
     scan_extensions: List[str]
     fuzzy_threshold: int
     tracklists_delay: float
+    min_duration_minutes: int
 
 
 class SettingsUpdate(BaseModel):
     """Settings update model"""
-    music_dir: str | None = None
+    music_dir: str | None = None  # Legacy support
+    music_dirs: List[str] | None = None  # Multiple directories
     scan_extensions: List[str] | None = None
     fuzzy_threshold: int | None = None
     tracklists_delay: float | None = None
+    min_duration_minutes: int | None = None
 
 
 def get_settings_file():
@@ -50,32 +54,59 @@ def save_settings(data: dict):
         json.dump(data, f, indent=2)
 
 
+@router.get("", response_model=AppSettings)
 @router.get("/", response_model=AppSettings)
 async def get_settings():
     """Get current application settings"""
     saved = load_saved_settings()
     
+    # Handle music_dirs - migrate from music_dir if needed
+    music_dirs = saved.get("music_dirs", [])
+    if not music_dirs:
+        # Migrate from single music_dir
+        single_dir = saved.get("music_dir", settings.music_dir)
+        music_dirs = [single_dir] if single_dir else []
+    
     return AppSettings(
-        music_dir=saved.get("music_dir", settings.music_dir),
+        music_dir=music_dirs[0] if music_dirs else settings.music_dir,
+        music_dirs=music_dirs if music_dirs else [settings.music_dir],
         scan_extensions=saved.get("scan_extensions", settings.scan_extensions),
         fuzzy_threshold=saved.get("fuzzy_threshold", settings.fuzzy_threshold),
-        tracklists_delay=saved.get("tracklists_delay", settings.tracklists_delay)
+        tracklists_delay=saved.get("tracklists_delay", settings.tracklists_delay),
+        min_duration_minutes=saved.get("min_duration_minutes", settings.min_duration_minutes)
     )
 
 
+@router.patch("", response_model=AppSettings)
 @router.patch("/", response_model=AppSettings)
 async def update_settings(update: SettingsUpdate):
     """Update application settings"""
     current = load_saved_settings()
     
     update_data = update.model_dump(exclude_unset=True)
-    current.update(update_data)
     
-    # Validate music_dir exists
-    if "music_dir" in update_data:
-        if not os.path.exists(update_data["music_dir"]):
+    # Handle music_dirs - validate all directories exist
+    if "music_dirs" in update_data:
+        invalid_dirs = [d for d in update_data["music_dirs"] if d and not os.path.exists(d)]
+        if invalid_dirs:
+            raise HTTPException(status_code=400, detail=f"Directories do not exist: {', '.join(invalid_dirs)}")
+        # Keep music_dir in sync with first entry
+        if update_data["music_dirs"]:
+            update_data["music_dir"] = update_data["music_dirs"][0]
+    
+    # Legacy music_dir support
+    if "music_dir" in update_data and "music_dirs" not in update_data:
+        if update_data["music_dir"] and not os.path.exists(update_data["music_dir"]):
             raise HTTPException(status_code=400, detail="Music directory does not exist")
+        # Update music_dirs to match
+        current_dirs = current.get("music_dirs", [])
+        if current_dirs:
+            current_dirs[0] = update_data["music_dir"]
+        else:
+            current_dirs = [update_data["music_dir"]]
+        update_data["music_dirs"] = current_dirs
     
+    current.update(update_data)
     save_settings(current)
     logger.info(f"Settings updated: {update_data}")
     

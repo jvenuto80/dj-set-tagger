@@ -12,7 +12,10 @@ import {
   ExternalLink,
   Clock,
   HardDrive,
-  FileAudio
+  FileAudio,
+  Loader2,
+  Image,
+  RefreshCw
 } from 'lucide-react'
 import { 
   getTrack, 
@@ -21,7 +24,9 @@ import {
   getMatchResults, 
   selectMatch,
   applyTags,
-  renameTrack 
+  renameTrack,
+  searchCoverArt,
+  updateTrackCover
 } from '../api'
 
 function formatDuration(seconds) {
@@ -103,6 +108,9 @@ function TrackDetail() {
   const queryClient = useQueryClient()
   const [isEditing, setIsEditing] = useState(false)
   const [editForm, setEditForm] = useState({})
+  const [showCoverOptions, setShowCoverOptions] = useState(false)
+  const [coverOptions, setCoverOptions] = useState([])
+  const [isLoadingCovers, setIsLoadingCovers] = useState(false)
 
   const { data: track, isLoading } = useQuery({
     queryKey: ['track', id],
@@ -146,11 +154,61 @@ function TrackDetail() {
     },
   })
 
+  const coverMutation = useMutation({
+    mutationFn: (coverUrl) => updateTrackCover(id, coverUrl),
+    onSuccess: () => {
+      queryClient.invalidateQueries(['track', id])
+      setShowCoverOptions(false)
+    },
+  })
+
+  const loadCoverOptions = async () => {
+    setIsLoadingCovers(true)
+    setShowCoverOptions(true)
+    try {
+      // Collect cover URLs from matches
+      const matchCovers = (matches || [])
+        .filter(m => m.cover_url)
+        .map(m => ({
+          url: m.cover_url,
+          source: m.source || 'Match Result',
+          title: m.title
+        }))
+      
+      // Search for additional cover art
+      const searchQuery = `${track.artist || ''} ${track.title || track.filename}`.trim()
+      const searchResults = await searchCoverArt(id, searchQuery)
+      
+      // Combine and dedupe by URL
+      const allCovers = [...matchCovers, ...(searchResults || [])]
+      const uniqueCovers = allCovers.filter((cover, index, self) => 
+        index === self.findIndex(c => c.url === cover.url)
+      )
+      
+      setCoverOptions(uniqueCovers)
+    } catch (error) {
+      console.error('Error loading cover options:', error)
+      // Still show match covers even if search fails
+      const matchCovers = (matches || [])
+        .filter(m => m.cover_url)
+        .map(m => ({
+          url: m.cover_url,
+          source: m.source || 'Match Result',
+          title: m.title
+        }))
+      setCoverOptions(matchCovers)
+    } finally {
+      setIsLoadingCovers(false)
+    }
+  }
+
   const startEditing = () => {
     setEditForm({
       title: track.matched_title || track.title || '',
       artist: track.matched_artist || track.artist || '',
+      album: track.matched_album || track.album || '',
       genre: track.matched_genre || track.genre || '',
+      year: track.matched_year || track.year || '',
     })
     setIsEditing(true)
   }
@@ -159,7 +217,9 @@ function TrackDetail() {
     updateMutation.mutate({
       matched_title: editForm.title,
       matched_artist: editForm.artist,
+      matched_album: editForm.album,
       matched_genre: editForm.genre,
+      matched_year: editForm.year,
       status: 'matched',
     })
   }
@@ -255,6 +315,22 @@ function TrackDetail() {
               </div>
               
               <div>
+                <label className="text-sm text-gray-400">Album</label>
+                {isEditing ? (
+                  <input
+                    type="text"
+                    value={editForm.album}
+                    onChange={(e) => setEditForm({ ...editForm, album: e.target.value })}
+                    className="w-full mt-1 px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:border-primary-500"
+                  />
+                ) : (
+                  <p className="mt-1 font-medium">
+                    {track.matched_album || track.album || '-'}
+                  </p>
+                )}
+              </div>
+              
+              <div>
                 <label className="text-sm text-gray-400">Genre</label>
                 {isEditing ? (
                   <input
@@ -266,6 +342,22 @@ function TrackDetail() {
                 ) : (
                   <p className="mt-1 font-medium">
                     {track.matched_genre || track.genre || '-'}
+                  </p>
+                )}
+              </div>
+              
+              <div>
+                <label className="text-sm text-gray-400">Year</label>
+                {isEditing ? (
+                  <input
+                    type="text"
+                    value={editForm.year}
+                    onChange={(e) => setEditForm({ ...editForm, year: e.target.value })}
+                    className="w-full mt-1 px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:border-primary-500"
+                  />
+                ) : (
+                  <p className="mt-1 font-medium">
+                    {track.matched_year || track.year || '-'}
                   </p>
                 )}
               </div>
@@ -288,7 +380,11 @@ function TrackDetail() {
                 disabled={matchMutation.isPending}
                 className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg text-sm flex items-center gap-2 disabled:opacity-50"
               >
-                <Search className="w-4 h-4" />
+                {matchMutation.isPending ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Search className="w-4 h-4" />
+                )}
                 {matchMutation.isPending ? 'Searching...' : 'Search Again'}
               </button>
             </div>
@@ -316,7 +412,22 @@ function TrackDetail() {
         <div className="space-y-6">
           {/* Cover Art */}
           <div className="bg-gray-800 rounded-xl p-6 border border-gray-700">
-            <h2 className="text-lg font-semibold mb-4">Cover Art</h2>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-semibold">Cover Art</h2>
+              <button
+                onClick={loadCoverOptions}
+                disabled={isLoadingCovers}
+                className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 rounded-lg text-sm flex items-center gap-2 disabled:opacity-50"
+                title="Browse cover options"
+              >
+                {isLoadingCovers ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Image className="w-4 h-4" />
+                )}
+                Browse
+              </button>
+            </div>
             <div className="aspect-square bg-gray-700 rounded-lg overflow-hidden">
               {track.matched_cover_url ? (
                 <img 
@@ -330,7 +441,92 @@ function TrackDetail() {
                 </div>
               )}
             </div>
+            {track.matched_cover_url && (
+              <p className="text-xs text-gray-500 mt-2 truncate" title={track.matched_cover_url}>
+                Source: {new URL(track.matched_cover_url).hostname}
+              </p>
+            )}
           </div>
+
+          {/* Cover Art Options Modal */}
+          {showCoverOptions && (
+            <div className="bg-gray-800 rounded-xl p-6 border border-gray-700">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-lg font-semibold">Choose Cover Art</h2>
+                <button
+                  onClick={() => setShowCoverOptions(false)}
+                  className="p-1 hover:bg-gray-700 rounded"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              
+              {isLoadingCovers ? (
+                <div className="flex items-center justify-center py-8">
+                  <Loader2 className="w-8 h-8 animate-spin text-gray-400" />
+                </div>
+              ) : coverOptions.length > 0 ? (
+                <div className="grid grid-cols-2 gap-3 max-h-80 overflow-y-auto">
+                  {coverOptions.map((cover, index) => (
+                    <button
+                      key={index}
+                      onClick={() => coverMutation.mutate(cover.url)}
+                      disabled={coverMutation.isPending}
+                      className={`relative aspect-square bg-gray-700 rounded-lg overflow-hidden hover:ring-2 hover:ring-primary-500 transition-all ${
+                        track.matched_cover_url === cover.url ? 'ring-2 ring-green-500' : ''
+                      }`}
+                    >
+                      <img 
+                        src={cover.url} 
+                        alt={cover.title || 'Cover option'}
+                        className="w-full h-full object-cover"
+                        onError={(e) => {
+                          e.target.parentElement.style.display = 'none'
+                        }}
+                      />
+                      <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-2">
+                        <p className="text-xs text-white truncate">{cover.source}</p>
+                      </div>
+                      {track.matched_cover_url === cover.url && (
+                        <div className="absolute top-2 right-2 bg-green-500 rounded-full p-1">
+                          <Check className="w-3 h-3" />
+                        </div>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-gray-400 text-center py-4">
+                  No cover art options found. Try searching for matches first.
+                </p>
+              )}
+              
+              {/* Custom URL input */}
+              <div className="mt-4 pt-4 border-t border-gray-700">
+                <label className="text-sm text-gray-400">Custom URL</label>
+                <div className="flex gap-2 mt-1">
+                  <input
+                    type="text"
+                    placeholder="Paste image URL..."
+                    id="custom-cover-url"
+                    className="flex-1 px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-sm focus:outline-none focus:border-primary-500"
+                  />
+                  <button
+                    onClick={() => {
+                      const input = document.getElementById('custom-cover-url')
+                      if (input.value) {
+                        coverMutation.mutate(input.value)
+                      }
+                    }}
+                    disabled={coverMutation.isPending}
+                    className="px-3 py-2 bg-primary-600 hover:bg-primary-700 rounded-lg text-sm"
+                  >
+                    Apply
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* File Info */}
           <div className="bg-gray-800 rounded-xl p-6 border border-gray-700">

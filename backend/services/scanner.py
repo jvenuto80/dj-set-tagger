@@ -2,6 +2,7 @@
 Directory scanner service - scans directories for audio files
 """
 import os
+import json
 import asyncio
 from pathlib import Path
 from datetime import datetime
@@ -25,9 +26,39 @@ _scan_status = {
     "files_found": 0,
     "files_added": 0,
     "files_skipped": 0,
+    "files_filtered": 0,
     "errors": []
 }
 _scan_stop_flag = False
+
+
+def get_min_duration_setting() -> int:
+    """Get minimum duration setting from saved settings"""
+    settings_file = os.path.join(settings.config_dir, "settings.json")
+    if os.path.exists(settings_file):
+        with open(settings_file, "r") as f:
+            saved = json.load(f)
+            return saved.get("min_duration_minutes", 0)
+    return 0
+
+
+def get_music_dirs() -> List[str]:
+    """Get list of music directories from saved settings"""
+    settings_file = os.path.join(settings.config_dir, "settings.json")
+    if os.path.exists(settings_file):
+        with open(settings_file, "r") as f:
+            saved = json.load(f)
+            music_dirs = saved.get("music_dirs", [])
+            if music_dirs:
+                return [d for d in music_dirs if d and os.path.exists(d)]
+            # Fallback to single music_dir
+            music_dir = saved.get("music_dir", settings.music_dir)
+            if music_dir and os.path.exists(music_dir):
+                return [music_dir]
+    # Default
+    if os.path.exists(settings.music_dir):
+        return [settings.music_dir]
+    return []
 
 
 async def get_scan_status():
@@ -130,8 +161,12 @@ def parse_filename_for_metadata(filename: str) -> dict:
     return metadata
 
 
-async def scan_directory(directory: str):
-    """Scan directory for audio files and add to database"""
+async def scan_directory(directory: str = None):
+    """Scan directory(ies) for audio files and add to database
+    
+    If directory is provided, scan only that directory.
+    If directory is None, scan all configured music_dirs.
+    """
     global _scan_status, _scan_stop_flag
     
     _scan_stop_flag = False
@@ -143,28 +178,50 @@ async def scan_directory(directory: str):
         "files_found": 0,
         "files_added": 0,
         "files_skipped": 0,
+        "files_filtered": 0,
         "errors": []
     }
+    
+    # Determine directories to scan
+    if directory:
+        directories = [directory]
+    else:
+        directories = get_music_dirs()
+    
+    if not directories:
+        logger.error("No valid music directories configured")
+        _scan_status["errors"].append("No valid music directories configured")
+        _scan_status["running"] = False
+        return
     
     extensions = get_audio_extensions()
     audio_files: List[str] = []
     
-    logger.info(f"Scanning directory: {directory}")
+    logger.info(f"Scanning directories: {directories}")
     logger.info(f"Looking for extensions: {extensions}")
     
-    # First pass: find all audio files
+    # First pass: find all audio files from all directories
     try:
-        for root, dirs, files in os.walk(directory):
+        for scan_dir in directories:
             if _scan_stop_flag:
                 break
+            
+            if not os.path.exists(scan_dir):
+                logger.warning(f"Directory does not exist, skipping: {scan_dir}")
+                continue
                 
-            for file in files:
-                if any(file.lower().endswith(ext) for ext in extensions):
-                    audio_files.append(os.path.join(root, file))
+            logger.info(f"Scanning: {scan_dir}")
+            for root, dirs, files in os.walk(scan_dir):
+                if _scan_stop_flag:
+                    break
+                    
+                for file in files:
+                    if any(file.lower().endswith(ext) for ext in extensions):
+                        audio_files.append(os.path.join(root, file))
         
         _scan_status["total"] = len(audio_files)
         _scan_status["files_found"] = len(audio_files)
-        logger.info(f"Found {len(audio_files)} audio files")
+        logger.info(f"Found {len(audio_files)} audio files across {len(directories)} directories")
         
     except Exception as e:
         logger.error(f"Error scanning directory: {e}")
@@ -198,6 +255,15 @@ async def scan_directory(directory: str):
                 # Prefer file metadata, fall back to filename parsing
                 title = metadata["title"] or filename_meta["title"]
                 artist = metadata["artist"] or filename_meta["artist"]
+                
+                # Check minimum duration filter
+                min_duration = get_min_duration_setting()
+                if min_duration > 0 and metadata["duration"]:
+                    min_seconds = min_duration * 60
+                    if metadata["duration"] < min_seconds:
+                        _scan_status["files_filtered"] += 1
+                        logger.debug(f"Skipping {filepath}: duration {metadata['duration']}s < {min_seconds}s minimum")
+                        continue
                 
                 # Get file size
                 file_size = os.path.getsize(filepath)
@@ -238,4 +304,4 @@ async def scan_directory(directory: str):
     _scan_status["running"] = False
     _scan_status["current_file"] = None
     
-    logger.info(f"Scan complete. Added: {_scan_status['files_added']}, Skipped: {_scan_status['files_skipped']}")
+    logger.info(f"Scan complete. Added: {_scan_status['files_added']}, Skipped: {_scan_status['files_skipped']}, Filtered: {_scan_status['files_filtered']}")

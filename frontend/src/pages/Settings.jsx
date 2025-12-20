@@ -5,7 +5,9 @@ import {
   ChevronRight, 
   ChevronUp,
   Save,
-  RotateCcw
+  RotateCcw,
+  Plus,
+  Trash2
 } from 'lucide-react'
 import { getSettings, updateSettings, listDirectories } from '../api'
 
@@ -52,6 +54,7 @@ function Settings() {
   const queryClient = useQueryClient()
   const [showDirBrowser, setShowDirBrowser] = useState(false)
   const [browsingPath, setBrowsingPath] = useState('/')
+  const [browsingIndex, setBrowsingIndex] = useState(0)  // Which directory we're browsing for
 
   const { data: settings, isLoading } = useQuery({
     queryKey: ['settings'],
@@ -63,10 +66,11 @@ function Settings() {
   // Initialize form when settings load
   if (settings && !formData) {
     setFormData({
-      music_dir: settings.music_dir,
+      music_dirs: settings.music_dirs || [settings.music_dir],
       scan_extensions: settings.scan_extensions.join(', '),
       fuzzy_threshold: settings.fuzzy_threshold,
       tracklists_delay: settings.tracklists_delay,
+      min_duration_minutes: settings.min_duration_minutes || 0,
     })
   }
 
@@ -80,11 +84,16 @@ function Settings() {
   const handleSubmit = (e) => {
     e.preventDefault()
     
+    // Filter out empty directories
+    const validDirs = formData.music_dirs.filter(d => d && d.trim())
+    
     const updates = {
-      music_dir: formData.music_dir,
+      music_dirs: validDirs,
+      music_dir: validDirs[0] || '',  // Keep legacy field in sync
       scan_extensions: formData.scan_extensions.split(',').map(s => s.trim().toLowerCase()),
       fuzzy_threshold: parseInt(formData.fuzzy_threshold),
       tracklists_delay: parseFloat(formData.tracklists_delay),
+      min_duration_minutes: parseInt(formData.min_duration_minutes) || 0,
     }
     
     updateMutation.mutate(updates)
@@ -95,8 +104,26 @@ function Settings() {
   }
 
   const confirmDirectory = () => {
-    setFormData({ ...formData, music_dir: browsingPath })
+    const newDirs = [...formData.music_dirs]
+    newDirs[browsingIndex] = browsingPath
+    setFormData({ ...formData, music_dirs: newDirs })
     setShowDirBrowser(false)
+  }
+  
+  const addMountPoint = () => {
+    setFormData({ ...formData, music_dirs: [...formData.music_dirs, ''] })
+  }
+  
+  const removeMountPoint = (index) => {
+    if (formData.music_dirs.length <= 1) return  // Keep at least one
+    const newDirs = formData.music_dirs.filter((_, i) => i !== index)
+    setFormData({ ...formData, music_dirs: newDirs })
+  }
+  
+  const updateMountPoint = (index, value) => {
+    const newDirs = [...formData.music_dirs]
+    newDirs[index] = value
+    setFormData({ ...formData, music_dirs: newDirs })
   }
 
   if (isLoading || !formData) {
@@ -111,63 +138,89 @@ function Settings() {
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-6">
-        {/* Music Directory */}
+        {/* Music Directories */}
         <div className="bg-gray-800 rounded-xl p-6 border border-gray-700">
-          <h2 className="text-lg font-semibold mb-4">Music Directory</h2>
-          
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm text-gray-400 mb-1">
-                Directory to scan for audio files
-              </label>
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  value={formData.music_dir}
-                  onChange={(e) => setFormData({ ...formData, music_dir: e.target.value })}
-                  className="flex-1 px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:border-primary-500"
-                />
-                <button
-                  type="button"
-                  onClick={() => {
-                    setBrowsingPath(formData.music_dir || '/')
-                    setShowDirBrowser(!showDirBrowser)
-                  }}
-                  className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg"
-                >
-                  <Folder className="w-5 h-5" />
-                </button>
-              </div>
-            </div>
-            
-            {showDirBrowser && (
-              <div className="space-y-2">
-                <div className="text-sm text-gray-400">
-                  Current: <span className="text-white">{browsingPath}</span>
-                </div>
-                <DirectoryBrowser
-                  currentPath={browsingPath}
-                  onSelect={selectDirectory}
-                />
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    onClick={confirmDirectory}
-                    className="px-4 py-2 bg-primary-600 hover:bg-primary-700 rounded-lg text-sm"
-                  >
-                    Select This Directory
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setShowDirBrowser(false)}
-                    className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            )}
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-lg font-semibold">Music Directories</h2>
+            <button
+              type="button"
+              onClick={addMountPoint}
+              className="flex items-center gap-1 px-3 py-1.5 bg-primary-600 hover:bg-primary-700 rounded-lg text-sm"
+            >
+              <Plus className="w-4 h-4" />
+              Add Mount Point
+            </button>
           </div>
+          
+          <div className="space-y-3">
+            {formData.music_dirs.map((dir, index) => (
+              <div key={index} className="space-y-2">
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={dir}
+                    onChange={(e) => updateMountPoint(index, e.target.value)}
+                    placeholder="/path/to/music"
+                    className="flex-1 px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:border-primary-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setBrowsingPath(dir || '/')
+                      setBrowsingIndex(index)
+                      setShowDirBrowser(showDirBrowser && browsingIndex === index ? false : true)
+                    }}
+                    className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg"
+                    title="Browse"
+                  >
+                    <Folder className="w-5 h-5" />
+                  </button>
+                  {formData.music_dirs.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => removeMountPoint(index)}
+                      className="px-4 py-2 bg-red-600/20 hover:bg-red-600/30 text-red-400 rounded-lg"
+                      title="Remove"
+                    >
+                      <Trash2 className="w-5 h-5" />
+                    </button>
+                  )}
+                </div>
+                
+                {showDirBrowser && browsingIndex === index && (
+                  <div className="space-y-2 ml-4 border-l-2 border-gray-600 pl-4">
+                    <div className="text-sm text-gray-400">
+                      Current: <span className="text-white">{browsingPath}</span>
+                    </div>
+                    <DirectoryBrowser
+                      currentPath={browsingPath}
+                      onSelect={selectDirectory}
+                    />
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={confirmDirectory}
+                        className="px-4 py-2 bg-primary-600 hover:bg-primary-700 rounded-lg text-sm"
+                      >
+                        Select This Directory
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setShowDirBrowser(false)}
+                        className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+          
+          <p className="text-sm text-gray-500 mt-3">
+            Add multiple mount points to scan music from different locations.
+          </p>
         </div>
 
         {/* Scan Settings */}
@@ -186,6 +239,23 @@ function Settings() {
                 className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:border-primary-500"
                 placeholder="mp3, flac, wav, m4a"
               />
+            </div>
+            
+            <div>
+              <label className="block text-sm text-gray-400 mb-1">
+                Minimum Track Duration (minutes)
+              </label>
+              <input
+                type="number"
+                min="0"
+                max="999"
+                value={formData.min_duration_minutes}
+                onChange={(e) => setFormData({ ...formData, min_duration_minutes: e.target.value })}
+                className="w-32 px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:border-primary-500"
+              />
+              <p className="text-sm text-gray-500 mt-1">
+                Filter out tracks shorter than this. Use 30-60 to exclude singles. Set to 0 to disable.
+              </p>
             </div>
           </div>
         </div>
@@ -246,10 +316,11 @@ function Settings() {
           <button
             type="button"
             onClick={() => setFormData({
-              music_dir: settings.music_dir,
+              music_dirs: settings.music_dirs || [settings.music_dir],
               scan_extensions: settings.scan_extensions.join(', '),
               fuzzy_threshold: settings.fuzzy_threshold,
               tracklists_delay: settings.tracklists_delay,
+              min_duration_minutes: settings.min_duration_minutes || 0,
             })}
             className="px-6 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg flex items-center gap-2"
           >

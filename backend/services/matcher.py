@@ -1,5 +1,6 @@
 """
-Fuzzy matching service - matches local tracks with 1001Tracklists results
+Fuzzy matching service - matches local tracks with tracklist information
+Uses Google search to find tracklists from various sources
 """
 import re
 import asyncio
@@ -8,6 +9,7 @@ from rapidfuzz import fuzz, process
 from sqlalchemy import select
 from backend.services.database import get_db
 from backend.services.tracklists_api import search_1001tracklists, get_tracklist_details
+from backend.services.google_search import search_tracklists_google
 from backend.models.track import Track, MatchCandidate
 from backend.config import settings
 from loguru import logger
@@ -127,22 +129,158 @@ class TrackMatcher:
         return weighted_score
     
     async def find_matches_for_track(self, track: Track) -> List[Dict]:
-        """Find potential matches for a track from 1001Tracklists"""
+        """Find potential matches for a track using Google search"""
         matches = []
         
         # Extract search terms
         search_terms = self.extract_search_terms(track)
         
+        logger.info(f"Extracted search terms: {search_terms}")
+        
         if not search_terms:
             logger.warning(f"No search terms extracted for track {track.id}")
             return matches
         
-        # Search for each term
-        seen_urls = set()
+        # Build artist and title from search terms
+        artist = track.artist or ""
+        title = track.title or ""
+        filename = track.filename or ""
         
-        for term in search_terms[:3]:  # Limit to first 3 terms
+        # If no metadata, try to extract from filename
+        if not artist and not title and filename:
+            clean_name = self.clean_string(filename)
+            if " - " in filename:
+                parts = filename.split(" - ", 1)
+                artist = parts[0].strip()
+                title = parts[1].strip() if len(parts) > 1 else clean_name
+            else:
+                title = clean_name
+        
+        try:
+            # PRIMARY: Search using Google
+            logger.info(f"Searching Google for tracklist: artist='{artist}', title='{title}'")
+            google_results = await search_tracklists_google(
+                artist=artist,
+                title=title,
+                filename=filename
+            )
+            
+            logger.info(f"Got {len(google_results)} results from Google search")
+            
+            # Process Google results
+            for result in google_results:
+                # Calculate match score
+                score = self._calculate_google_result_score(track, result)
+                logger.debug(f"Match score for {result.get('title', 'unknown')}: {score}")
+                
+                if score >= self.threshold:
+                    # Convert to standard format
+                    match_data = {
+                        "title": result.get("title", ""),
+                        "artist": result.get("artist", ""),
+                        "url": result.get("source_url", ""),
+                        "cover_url": result.get("cover_url", ""),
+                        "source": result.get("source", "web"),
+                        "tracks": result.get("tracks", []),
+                        "num_tracks": len(result.get("tracks", [])),
+                        "genres": result.get("genres", []),
+                        "genre": result.get("genres", [""])[0] if result.get("genres") else "",
+                        "date_recorded": result.get("date", ""),
+                        "dj": result.get("artist", ""),
+                        "confidence": score,
+                        "match_type": "google_search"
+                    }
+                    matches.append(match_data)
+            
+            # FALLBACK: If Google didn't find enough results, try direct 1001tracklists
+            if len(matches) < 2:
+                logger.info("Trying direct 1001tracklists search as fallback...")
+                seen_urls = set(m.get("url", "") for m in matches)
+                
+                for term in search_terms[:2]:
+                    try:
+                        results = await search_1001tracklists(term)
+                        logger.info(f"Got {len(results)} results from 1001tracklists for: {term}")
+                        
+                        for result in results:
+                            url = result.get("url", "")
+                            if url in seen_urls:
+                                continue
+                            seen_urls.add(url)
+                            
+                            score = self.calculate_match_score(track, result)
+                            if score >= self.threshold:
+                                matches.append({
+                                    **result,
+                                    "confidence": score,
+                                    "match_type": "1001tracklists_direct"
+                                })
+                        
+                        await asyncio.sleep(1.0)
+                        
+                    except Exception as e:
+                        logger.warning(f"1001tracklists fallback failed for '{term}': {e}")
+            
+        except Exception as e:
+            logger.error(f"Error in Google search: {e}")
+            # Fall back to 1001tracklists only
+            logger.info("Falling back to 1001tracklists search only...")
+            await self._fallback_search(track, search_terms, matches)
+        
+        # Sort by confidence
+        matches.sort(key=lambda x: x.get("confidence", 0), reverse=True)
+        
+        return matches[:10]  # Return top 10 matches
+    
+    def _calculate_google_result_score(self, track: Track, result: Dict) -> float:
+        """Calculate match score for a Google search result"""
+        scores = []
+        
+        track_artist = self.clean_string(track.artist or "")
+        track_title = self.clean_string(track.title or track.filename)
+        
+        result_title = self.clean_string(result.get("title", ""))
+        result_artist = self.clean_string(result.get("artist", ""))
+        
+        # Title match
+        if track_title and result_title:
+            title_score = fuzz.token_set_ratio(track_title, result_title)
+            scores.append(("title", title_score, 0.4))
+        
+        # Artist match
+        if track_artist and result_artist:
+            artist_score = fuzz.token_set_ratio(track_artist, result_artist)
+            scores.append(("artist", artist_score, 0.3))
+        
+        # Filename vs full title
+        track_full = self.clean_string(track.filename)
+        if track_full and result_title:
+            full_score = fuzz.token_set_ratio(track_full, result_title)
+            scores.append(("full", full_score, 0.2))
+        
+        # Bonus for having tracks
+        num_tracks = len(result.get("tracks", []))
+        if num_tracks > 0:
+            track_bonus = min(num_tracks * 2, 20)  # Up to 20 bonus points
+            scores.append(("tracks", track_bonus + 50, 0.1))
+        
+        if not scores:
+            return 0.0
+        
+        total_weight = sum(s[2] for s in scores)
+        weighted_score = sum(s[1] * s[2] for s in scores) / total_weight
+        
+        return weighted_score
+    
+    async def _fallback_search(self, track: Track, search_terms: List[str], matches: List[Dict]):
+        """Fallback to 1001tracklists direct search"""
+        seen_urls = set(m.get("url", "") for m in matches)
+        
+        for term in search_terms[:3]:
             try:
+                logger.info(f"Searching 1001tracklists for: {term}")
                 results = await search_1001tracklists(term)
+                logger.info(f"Got {len(results)} results for term: {term}")
                 
                 for result in results:
                     url = result.get("url", "")
@@ -150,26 +288,20 @@ class TrackMatcher:
                         continue
                     seen_urls.add(url)
                     
-                    # Calculate match score
                     score = self.calculate_match_score(track, result)
+                    logger.debug(f"Match score for {result.get('title', 'unknown')}: {score}")
                     
                     if score >= self.threshold:
                         matches.append({
                             **result,
                             "confidence": score,
-                            "match_type": "search"
+                            "match_type": "1001tracklists_fallback"
                         })
                 
-                # Small delay between searches
                 await asyncio.sleep(1.0)
                 
             except Exception as e:
                 logger.error(f"Error searching for term '{term}': {e}")
-        
-        # Sort by confidence
-        matches.sort(key=lambda x: x["confidence"], reverse=True)
-        
-        return matches[:10]  # Return top 10 matches
     
     async def enrich_match_with_tracklist_details(self, match: Dict) -> Dict:
         """Fetch full tracklist details for a match"""
@@ -265,6 +397,9 @@ async def find_matches(track_id: int):
                     dj=match.get("dj"),
                     event=match.get("event"),
                     date_recorded=match.get("date_recorded"),
+                    source=match.get("source", ""),
+                    extracted_tracks=match.get("tracks"),  # Store extracted tracks as JSON
+                    num_tracks=match.get("num_tracks", len(match.get("tracks", []))),
                     confidence=match.get("confidence", 0),
                     match_type=match.get("match_type", "fuzzy")
                 )
@@ -281,6 +416,7 @@ async def find_matches(track_id: int):
                 track.matched_dj = best_match.get("dj")
                 track.matched_event = best_match.get("event")
                 track.match_confidence = best_match["confidence"]
+                track.match_source = best_match.get("source", "")
                 track.status = "matched"
             else:
                 track.status = "pending"  # Needs manual review

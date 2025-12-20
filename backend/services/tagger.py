@@ -66,6 +66,73 @@ class AudioTagger:
             logger.error(f"Error resizing cover art: {e}")
             return image_data
     
+    async def write_album_artist(
+        self,
+        filepath: str,
+        album: Optional[str] = None,
+        artist: Optional[str] = None
+    ) -> bool:
+        """Write only album and artist tags to a file (quick update for series)"""
+        if not os.path.exists(filepath):
+            logger.error(f"File not found: {filepath}")
+            return False
+        
+        ext = os.path.splitext(filepath)[1].lower()
+        
+        try:
+            if ext == '.mp3':
+                try:
+                    audio = ID3(filepath)
+                except ID3NoHeaderError:
+                    audio = ID3()
+                
+                if album:
+                    audio['TALB'] = TALB(encoding=3, text=album)
+                if artist:
+                    audio['TPE1'] = TPE1(encoding=3, text=artist)
+                
+                audio.save(filepath)
+                logger.info(f"Updated album/artist tags for: {filepath}")
+                return True
+                
+            elif ext == '.flac':
+                audio = FLAC(filepath)
+                if album:
+                    audio['ALBUM'] = album
+                if artist:
+                    audio['ARTIST'] = artist
+                audio.save()
+                logger.info(f"Updated album/artist tags for: {filepath}")
+                return True
+                
+            elif ext in ['.m4a', '.aac', '.mp4']:
+                audio = MP4(filepath)
+                if album:
+                    audio['\xa9alb'] = [album]
+                if artist:
+                    audio['\xa9ART'] = [artist]
+                audio.save()
+                logger.info(f"Updated album/artist tags for: {filepath}")
+                return True
+                
+            elif ext == '.ogg':
+                audio = OggVorbis(filepath)
+                if album:
+                    audio['ALBUM'] = [album]
+                if artist:
+                    audio['ARTIST'] = [artist]
+                audio.save()
+                logger.info(f"Updated album/artist tags for: {filepath}")
+                return True
+            
+            else:
+                logger.warning(f"Unsupported format for quick tag update: {ext}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error writing album/artist to {filepath}: {e}")
+            return False
+    
     def tag_mp3(
         self,
         filepath: str,
