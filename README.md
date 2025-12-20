@@ -2,7 +2,12 @@
 
 A Docker application for scanning and tagging DJ sets and electronic music tracks using metadata from 1001Tracklists.com. Perfect for organizing long DJ sets, podcasts, and radio show recordings.
 
-![DJ Set Tagger Screenshot](docs/screenshot.png)
+## Screenshots
+
+### Dashboard
+Overview of your library with quick stats and recent tracks.
+
+![Dashboard](docs/dashboard.png)
 
 ## Features
 
@@ -15,17 +20,6 @@ A Docker application for scanning and tagging DJ sets and electronic music track
 - ✏️ **Manual Editing**: Edit metadata manually when automatic matching isn't accurate
 - 📁 **Smart Renaming**: Batch rename files using customizable patterns
 - 🤖 **AI-Ready**: Architecture prepared for future AI-based matching (audio fingerprinting, etc.)
-
-## Screenshots
-
-### Dashboard
-Overview of your library with quick stats and recent tracks.
-
-### Track List
-Browse all scanned tracks with filtering and batch actions.
-
-### Track Detail
-View match candidates, select the best match, and apply tags.
 
 ## Installation on Unraid
 
