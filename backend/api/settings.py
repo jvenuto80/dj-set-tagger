@@ -136,3 +136,47 @@ async def list_directories(path: str = "/"):
         raise HTTPException(status_code=403, detail="Permission denied")
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Directory not found")
+
+
+@router.get("/logs")
+async def get_logs(lines: int = 200, level: str = None):
+    """Get recent application logs"""
+    log_file = os.path.join(settings.config_dir, "app.log")
+    
+    if not os.path.exists(log_file):
+        return {"logs": [], "total_lines": 0, "message": "No log file found"}
+    
+    try:
+        with open(log_file, "r") as f:
+            all_lines = f.readlines()
+        
+        # Filter by level if specified
+        if level:
+            level = level.upper()
+            all_lines = [l for l in all_lines if f"| {level}" in l]
+        
+        # Get last N lines
+        recent_lines = all_lines[-lines:] if len(all_lines) > lines else all_lines
+        
+        return {
+            "logs": [line.strip() for line in recent_lines],
+            "total_lines": len(all_lines),
+            "showing": len(recent_lines)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error reading logs: {str(e)}")
+
+
+@router.delete("/logs")
+async def clear_logs():
+    """Clear the application log file"""
+    log_file = os.path.join(settings.config_dir, "app.log")
+    
+    try:
+        if os.path.exists(log_file):
+            with open(log_file, "w") as f:
+                f.write("")
+        logger.info("Log file cleared")
+        return {"message": "Logs cleared successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error clearing logs: {str(e)}")

@@ -70,9 +70,11 @@ class AudioTagger:
         self,
         filepath: str,
         album: Optional[str] = None,
-        artist: Optional[str] = None
+        artist: Optional[str] = None,
+        genre: Optional[str] = None,
+        album_artist: Optional[str] = None
     ) -> bool:
-        """Write only album and artist tags to a file (quick update for series)"""
+        """Write album, artist, genre, and album artist tags to a file (quick update for series)"""
         if not os.path.exists(filepath):
             logger.error(f"File not found: {filepath}")
             return False
@@ -90,9 +92,15 @@ class AudioTagger:
                     audio['TALB'] = TALB(encoding=3, text=album)
                 if artist:
                     audio['TPE1'] = TPE1(encoding=3, text=artist)
+                if genre:
+                    from mutagen.id3 import TCON
+                    audio['TCON'] = TCON(encoding=3, text=genre)
+                if album_artist:
+                    from mutagen.id3 import TPE2
+                    audio['TPE2'] = TPE2(encoding=3, text=album_artist)
                 
                 audio.save(filepath)
-                logger.info(f"Updated album/artist tags for: {filepath}")
+                logger.info(f"Updated album/artist/genre/album_artist tags for: {filepath}")
                 return True
                 
             elif ext == '.flac':
@@ -101,8 +109,12 @@ class AudioTagger:
                     audio['ALBUM'] = album
                 if artist:
                     audio['ARTIST'] = artist
+                if genre:
+                    audio['GENRE'] = genre
+                if album_artist:
+                    audio['ALBUMARTIST'] = album_artist
                 audio.save()
-                logger.info(f"Updated album/artist tags for: {filepath}")
+                logger.info(f"Updated album/artist/genre/album_artist tags for: {filepath}")
                 return True
                 
             elif ext in ['.m4a', '.aac', '.mp4']:
@@ -111,8 +123,12 @@ class AudioTagger:
                     audio['\xa9alb'] = [album]
                 if artist:
                     audio['\xa9ART'] = [artist]
+                if genre:
+                    audio['\xa9gen'] = [genre]
+                if album_artist:
+                    audio['aART'] = [album_artist]
                 audio.save()
-                logger.info(f"Updated album/artist tags for: {filepath}")
+                logger.info(f"Updated album/artist/genre/album_artist tags for: {filepath}")
                 return True
                 
             elif ext == '.ogg':
@@ -121,8 +137,12 @@ class AudioTagger:
                     audio['ALBUM'] = [album]
                 if artist:
                     audio['ARTIST'] = [artist]
+                if genre:
+                    audio['GENRE'] = [genre]
+                if album_artist:
+                    audio['ALBUMARTIST'] = [album_artist]
                 audio.save()
-                logger.info(f"Updated album/artist tags for: {filepath}")
+                logger.info(f"Updated album/artist/genre/album_artist tags for: {filepath}")
                 return True
             
             else:
@@ -130,8 +150,161 @@ class AudioTagger:
                 return False
                 
         except Exception as e:
-            logger.error(f"Error writing album/artist to {filepath}: {e}")
+            logger.error(f"Error writing album/artist/genre/album_artist to {filepath}: {e}")
             return False
+    
+    def _write_album_artist_cover_sync(
+        self,
+        filepath: str,
+        album: Optional[str] = None,
+        artist: Optional[str] = None,
+        genre: Optional[str] = None,
+        album_artist: Optional[str] = None,
+        cover_data: Optional[bytes] = None
+    ) -> bool:
+        """Synchronous version - Write album, artist, genre, album artist, and cover art tags to a file"""
+        if not os.path.exists(filepath):
+            logger.error(f"File not found: {filepath}")
+            return False
+        
+        ext = os.path.splitext(filepath)[1].lower()
+        
+        try:
+            if ext == '.mp3':
+                try:
+                    audio = ID3(filepath)
+                except ID3NoHeaderError:
+                    audio = ID3()
+                
+                if album:
+                    audio['TALB'] = TALB(encoding=3, text=album)
+                if artist:
+                    audio['TPE1'] = TPE1(encoding=3, text=artist)
+                if genre:
+                    from mutagen.id3 import TCON
+                    audio['TCON'] = TCON(encoding=3, text=genre)
+                if album_artist:
+                    from mutagen.id3 import TPE2
+                    audio['TPE2'] = TPE2(encoding=3, text=album_artist)
+                
+                # Set cover art
+                if cover_data:
+                    audio['APIC'] = APIC(
+                        encoding=3,
+                        mime='image/jpeg',
+                        type=3,  # Cover (front)
+                        desc='Cover',
+                        data=cover_data
+                    )
+                
+                audio.save(filepath)
+                return True
+                
+            elif ext == '.flac':
+                audio = FLAC(filepath)
+                if album:
+                    audio['ALBUM'] = album
+                if artist:
+                    audio['ARTIST'] = artist
+                if genre:
+                    audio['GENRE'] = genre
+                if album_artist:
+                    audio['ALBUMARTIST'] = album_artist
+                
+                # Set cover art
+                if cover_data:
+                    from mutagen.flac import Picture
+                    picture = Picture()
+                    picture.type = 3  # Cover (front)
+                    picture.mime = 'image/jpeg'
+                    picture.desc = 'Cover'
+                    picture.data = cover_data
+                    # Get image dimensions
+                    from PIL import Image
+                    from io import BytesIO
+                    img = Image.open(BytesIO(cover_data))
+                    picture.width = img.width
+                    picture.height = img.height
+                    picture.depth = 24
+                    audio.clear_pictures()
+                    audio.add_picture(picture)
+                
+                audio.save()
+                return True
+                
+            elif ext in ['.m4a', '.aac', '.mp4']:
+                audio = MP4(filepath)
+                if album:
+                    audio['\xa9alb'] = [album]
+                if artist:
+                    audio['\xa9ART'] = [artist]
+                if genre:
+                    audio['\xa9gen'] = [genre]
+                if album_artist:
+                    audio['aART'] = [album_artist]
+                
+                # Set cover art
+                if cover_data:
+                    audio['covr'] = [MP4Cover(cover_data, imageformat=MP4Cover.FORMAT_JPEG)]
+                
+                audio.save()
+                return True
+                
+            elif ext == '.ogg':
+                audio = OggVorbis(filepath)
+                if album:
+                    audio['ALBUM'] = [album]
+                if artist:
+                    audio['ARTIST'] = [artist]
+                if genre:
+                    audio['GENRE'] = [genre]
+                if album_artist:
+                    audio['ALBUMARTIST'] = [album_artist]
+                
+                # OGG cover art requires base64 encoding in METADATA_BLOCK_PICTURE
+                if cover_data:
+                    import base64
+                    from mutagen.flac import Picture
+                    picture = Picture()
+                    picture.type = 3
+                    picture.mime = 'image/jpeg'
+                    picture.desc = 'Cover'
+                    picture.data = cover_data
+                    from PIL import Image
+                    from io import BytesIO
+                    img = Image.open(BytesIO(cover_data))
+                    picture.width = img.width
+                    picture.height = img.height
+                    picture.depth = 24
+                    audio['metadata_block_picture'] = [base64.b64encode(picture.write()).decode('ascii')]
+                
+                audio.save()
+                return True
+            
+            else:
+                logger.warning(f"Unsupported format for tag update with cover: {ext}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error writing tags with cover to {filepath}: {e}")
+            return False
+    
+    async def write_album_artist_cover(
+        self,
+        filepath: str,
+        album: Optional[str] = None,
+        artist: Optional[str] = None,
+        genre: Optional[str] = None,
+        album_artist: Optional[str] = None,
+        cover_data: Optional[bytes] = None
+    ) -> bool:
+        """Async wrapper - runs file I/O in thread pool to not block event loop"""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            None,  # Uses default thread pool
+            self._write_album_artist_cover_sync,
+            filepath, album, artist, genre, album_artist, cover_data
+        )
     
     def tag_mp3(
         self,

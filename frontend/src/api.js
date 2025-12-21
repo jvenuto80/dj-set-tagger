@@ -13,6 +13,11 @@ export const getTracks = async (params = {}) => {
   return data
 }
 
+export const getTrackFilters = async () => {
+  const { data } = await api.get('/tracks/filters')
+  return data
+}
+
 export const getTrack = async (id) => {
   const { data } = await api.get(`/tracks/${id}`)
   return data
@@ -132,6 +137,11 @@ export const searchCoverArt = async (trackId, query) => {
   return data
 }
 
+export const searchCoverArtByQuery = async (query) => {
+  const { data } = await api.get('/tracks/cover-search', { params: { query } })
+  return data
+}
+
 export const updateTrackCover = async (trackId, coverUrl) => {
   const { data } = await api.patch(`/tracks/${trackId}`, { matched_cover_url: coverUrl })
   return data
@@ -148,16 +158,34 @@ export const getTaggedSeries = async () => {
   return data
 }
 
-export const applySeriesAlbum = async (trackIds, album, artist = null) => {
+export const applySeriesAlbum = async (trackIds, album, artist = null, genre = null, albumArtist = null, coverUrl = null) => {
   const { data } = await api.post('/tracks/series/apply-album', trackIds, { 
-    params: { album, artist } 
+    params: { album, artist, genre, album_artist: albumArtist, cover_url: coverUrl } 
   })
+  return data
+}
+
+export const getTaggingJobStatus = async (jobId) => {
+  const { data } = await api.get(`/tracks/series/apply-album/status/${jobId}`)
   return data
 }
 
 // Database maintenance
 export const resyncDatabase = async () => {
   const { data } = await api.post('/tracks/resync')
+  return data
+}
+
+// Logs
+export const getLogs = async (lines = 200, level = null) => {
+  const params = { lines }
+  if (level) params.level = level
+  const { data } = await api.get('/settings/logs', { params })
+  return data
+}
+
+export const clearLogs = async () => {
+  const { data } = await api.delete('/settings/logs')
   return data
 }
 

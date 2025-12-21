@@ -1,8 +1,7 @@
 {
   "name": "dj-set-tagger-frontend",
-  "version": "0.5.0-alpha",
+  "version": "0.6.0-alpha",
   "private": true,
-  "version": "1.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",

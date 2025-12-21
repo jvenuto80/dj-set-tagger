@@ -14,6 +14,7 @@ services:
       - /Volumes/Media/Music:/music  # SMB share from 10.0.30.159
       - /Volumes/Media/radio:/radio  # Radio recordings mount
       - ./backend:/app/backend  # Hot reload for backend
+      - ./frontend/src:/app/frontend/src  # Hot reload for frontend src only
     environment:
       - MUSIC_DIR=/music
       - CONFIG_DIR=/config

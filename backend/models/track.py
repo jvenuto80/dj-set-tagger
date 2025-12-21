@@ -22,6 +22,7 @@ class Track(Base):
     title = Column(String, nullable=True)
     artist = Column(String, nullable=True)
     album = Column(String, nullable=True)
+    album_artist = Column(String, nullable=True)
     genre = Column(String, nullable=True)
     year = Column(String, nullable=True)
     duration = Column(Float, nullable=True)  # in seconds
@@ -36,6 +37,7 @@ class Track(Base):
     matched_title = Column(String, nullable=True)
     matched_artist = Column(String, nullable=True)
     matched_album = Column(String, nullable=True)
+    matched_album_artist = Column(String, nullable=True)
     matched_genre = Column(String, nullable=True)
     matched_year = Column(String, nullable=True)
     matched_cover_url = Column(String, nullable=True)
@@ -114,6 +116,7 @@ class TrackResponse(BaseModel):
     title: Optional[str] = None
     artist: Optional[str] = None
     album: Optional[str] = None
+    album_artist: Optional[str] = None
     genre: Optional[str] = None
     year: Optional[str] = None
     duration: Optional[float] = None
@@ -127,6 +130,7 @@ class TrackResponse(BaseModel):
     matched_title: Optional[str] = None
     matched_artist: Optional[str] = None
     matched_album: Optional[str] = None
+    matched_album_artist: Optional[str] = None
     matched_genre: Optional[str] = None
     matched_year: Optional[str] = None
     matched_cover_url: Optional[str] = None
@@ -148,11 +152,13 @@ class TrackUpdate(BaseModel):
     title: Optional[str] = None
     artist: Optional[str] = None
     album: Optional[str] = None
+    album_artist: Optional[str] = None
     genre: Optional[str] = None
     year: Optional[str] = None
     matched_title: Optional[str] = None
     matched_artist: Optional[str] = None
     matched_album: Optional[str] = None
+    matched_album_artist: Optional[str] = None
     matched_genre: Optional[str] = None
     matched_year: Optional[str] = None
     matched_cover_url: Optional[str] = None

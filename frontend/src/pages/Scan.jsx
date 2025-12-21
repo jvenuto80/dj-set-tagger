@@ -10,6 +10,7 @@ import {
   Loader2
 } from 'lucide-react'
 import { startScan, getScanStatus, stopScan, getSettings } from '../api'
+import ProgressButton from '../components/ProgressButton'
 
 function Scan() {
   const queryClient = useQueryClient()
@@ -143,14 +144,16 @@ function Scan() {
               </div>
             </div>
             
-            <button
+            <ProgressButton
               onClick={() => stopMutation.mutate()}
-              disabled={stopMutation.isPending}
-              className="w-full px-4 py-2 bg-red-600 hover:bg-red-700 rounded-lg flex items-center justify-center gap-2"
+              isLoading={stopMutation.isPending}
+              loadingText="Stopping..."
+              icon={<Square className="w-4 h-4" />}
+              variant="danger"
+              className="w-full"
             >
-              <Square className="w-4 h-4" />
               Stop Scan
-            </button>
+            </ProgressButton>
           </div>
         ) : (
           <div className="space-y-4">
@@ -206,14 +209,16 @@ function Scan() {
               </div>
             )}
             
-            <button
+            <ProgressButton
               onClick={() => startMutation.mutate(settings?.music_dir)}
-              disabled={startMutation.isPending}
-              className="w-full px-4 py-2 bg-primary-600 hover:bg-primary-700 rounded-lg flex items-center justify-center gap-2 disabled:opacity-50"
+              isLoading={startMutation.isPending}
+              loadingText="Starting..."
+              icon={<Play className="w-4 h-4" />}
+              variant="primary"
+              className="w-full"
             >
-              <Play className="w-4 h-4" />
-              {startMutation.isPending ? 'Starting...' : 'Start Scan'}
-            </button>
+              Start Scan
+            </ProgressButton>
           </div>
         )}
         

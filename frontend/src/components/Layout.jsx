@@ -57,7 +57,7 @@ function Layout({ children }) {
         
         <div className="p-4 border-t border-gray-700">
           <div className="text-xs text-gray-500 text-center">
-            DJ Set Tagger v0.5.0 alpha
+            DJ Set Tagger v0.6.0 alpha
           </div>
         </div>
       </aside>

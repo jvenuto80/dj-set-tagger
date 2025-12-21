@@ -28,6 +28,7 @@ import {
   searchCoverArt,
   updateTrackCover
 } from '../api'
+import ProgressButton from '../components/ProgressButton'
 
 function formatDuration(seconds) {
   if (!seconds) return '--:--'
@@ -111,6 +112,7 @@ function TrackDetail() {
   const [showCoverOptions, setShowCoverOptions] = useState(false)
   const [coverOptions, setCoverOptions] = useState([])
   const [isLoadingCovers, setIsLoadingCovers] = useState(false)
+  const [isSearching, setIsSearching] = useState(false)
 
   const { data: track, isLoading } = useQuery({
     queryKey: ['track', id],
@@ -121,6 +123,8 @@ function TrackDetail() {
     queryKey: ['matches', id],
     queryFn: () => getMatchResults(id),
     enabled: !!track,
+    // Poll more frequently while searching
+    refetchInterval: isSearching ? 1000 : false,
   })
 
   const updateMutation = useMutation({
@@ -133,9 +137,19 @@ function TrackDetail() {
 
   const matchMutation = useMutation({
     mutationFn: () => matchTrack(id),
+    onMutate: () => {
+      setIsSearching(true)
+      // Auto-stop searching after 30 seconds as fallback
+      setTimeout(() => setIsSearching(false), 30000)
+    },
     onSuccess: () => {
       queryClient.invalidateQueries(['track', id])
       queryClient.invalidateQueries(['matches', id])
+      // Keep searching state for a bit to catch the results
+      setTimeout(() => setIsSearching(false), 3000)
+    },
+    onError: () => {
+      setIsSearching(false)
     },
   })
 
@@ -207,6 +221,7 @@ function TrackDetail() {
       title: track.matched_title || track.title || '',
       artist: track.matched_artist || track.artist || '',
       album: track.matched_album || track.album || '',
+      albumArtist: track.matched_album_artist || track.album_artist || '',
       genre: track.matched_genre || track.genre || '',
       year: track.matched_year || track.year || '',
     })
@@ -218,6 +233,7 @@ function TrackDetail() {
       matched_title: editForm.title,
       matched_artist: editForm.artist,
       matched_album: editForm.album,
+      matched_album_artist: editForm.albumArtist,
       matched_genre: editForm.genre,
       matched_year: editForm.year,
       status: 'matched',
@@ -331,6 +347,22 @@ function TrackDetail() {
               </div>
               
               <div>
+                <label className="text-sm text-gray-400">Album Artist</label>
+                {isEditing ? (
+                  <input
+                    type="text"
+                    value={editForm.albumArtist}
+                    onChange={(e) => setEditForm({ ...editForm, albumArtist: e.target.value })}
+                    className="w-full mt-1 px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:border-primary-500"
+                  />
+                ) : (
+                  <p className="mt-1 font-medium">
+                    {track.matched_album_artist || track.album_artist || '-'}
+                  </p>
+                )}
+              </div>
+              
+              <div>
                 <label className="text-sm text-gray-400">Genre</label>
                 {isEditing ? (
                   <input
@@ -375,18 +407,15 @@ function TrackDetail() {
           <div className="bg-gray-800 rounded-xl p-6 border border-gray-700">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-xl font-semibold">Match Results</h2>
-              <button
+              <ProgressButton
                 onClick={() => matchMutation.mutate()}
-                disabled={matchMutation.isPending}
-                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg text-sm flex items-center gap-2 disabled:opacity-50"
+                isLoading={isSearching}
+                loadingText="Searching..."
+                icon={<Search className="w-4 h-4" />}
+                variant="primary"
               >
-                {matchMutation.isPending ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                ) : (
-                  <Search className="w-4 h-4" />
-                )}
-                {matchMutation.isPending ? 'Searching...' : 'Search Again'}
-              </button>
+                Search Again
+              </ProgressButton>
             </div>
 
             {matches?.length > 0 ? (

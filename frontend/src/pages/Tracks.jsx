@@ -9,9 +9,12 @@ import {
   CheckSquare, 
   Square,
   ChevronDown,
-  Filter
+  Filter,
+  X,
+  ChevronLeft,
+  ChevronRight
 } from 'lucide-react'
-import { getTracks, deleteTrack, batchMatch, batchApplyTags } from '../api'
+import { getTracks, deleteTrack, batchMatch, batchApplyTags, getTrackFilters, getTrackStats } from '../api'
 
 const statusFilters = [
   { value: '', label: 'All Tracks' },
@@ -27,6 +30,14 @@ const statusColors = {
   tagged: 'bg-green-500/20 text-green-400',
   error: 'bg-red-500/20 text-red-400',
 }
+
+const pageSizeOptions = [
+  { value: 20, label: '20' },
+  { value: 50, label: '50' },
+  { value: 100, label: '100' },
+  { value: 300, label: '300' },
+  { value: 10000, label: 'All' },
+]
 
 function TrackRow({ track, selected, onSelect }) {
   return (
@@ -85,19 +96,48 @@ function Tracks() {
   const [searchParams, setSearchParams] = useSearchParams()
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedTracks, setSelectedTracks] = useState(new Set())
+  const [genreFilter, setGenreFilter] = useState('')
+  const [artistFilter, setArtistFilter] = useState('')
+  const [albumFilter, setAlbumFilter] = useState('')
+  const [pageSize, setPageSize] = useState(50)
+  const [currentPage, setCurrentPage] = useState(0)
   const queryClient = useQueryClient()
 
   const status = searchParams.get('status') || ''
 
+  // Fetch filter options
+  const { data: filterOptions } = useQuery({
+    queryKey: ['track-filters'],
+    queryFn: getTrackFilters,
+    staleTime: 60000, // Cache for 1 minute
+  })
+
+  // Fetch stats for total count
+  const { data: stats } = useQuery({
+    queryKey: ['track-stats'],
+    queryFn: getTrackStats,
+    staleTime: 30000,
+  })
+
   const { data: tracks, isLoading } = useQuery({
-    queryKey: ['tracks', status, searchQuery],
+    queryKey: ['tracks', status, searchQuery, genreFilter, artistFilter, albumFilter, pageSize, currentPage],
     queryFn: () => getTracks({ 
       status: status || undefined, 
       search: searchQuery || undefined,
-      limit: 100 
+      genre: genreFilter || undefined,
+      artist: artistFilter || undefined,
+      album: albumFilter || undefined,
+      limit: pageSize,
+      skip: currentPage * pageSize
     }),
     refetchInterval: 10000,
   })
+
+  // Reset to first page when filters change
+  const handleFilterChange = (setter) => (value) => {
+    setter(value)
+    setCurrentPage(0)
+  }
 
   const deleteMutation = useMutation({
     mutationFn: deleteTrack,
@@ -149,13 +189,13 @@ function Tracks() {
         <div>
           <h1 className="text-3xl font-bold">Tracks</h1>
           <p className="text-gray-400 mt-1">
-            {tracks?.length || 0} tracks found
+            {stats?.total || 0} total tracks
           </p>
         </div>
       </div>
 
       {/* Filters and Search */}
-      <div className="flex flex-wrap gap-4">
+      <div className="flex flex-wrap gap-4 items-center">
         <div className="relative">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
           <input
@@ -176,6 +216,86 @@ function Tracks() {
             {statusFilters.map((filter) => (
               <option key={filter.value} value={filter.value}>
                 {filter.label}
+              </option>
+            ))}
+          </select>
+          <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+        </div>
+
+        {/* Genre Filter */}
+        <div className="relative">
+          <select
+            value={genreFilter}
+            onChange={(e) => handleFilterChange(setGenreFilter)(e.target.value)}
+            className="pl-4 pr-10 py-2 bg-gray-800 border border-gray-700 rounded-lg appearance-none focus:outline-none focus:border-primary-500 min-w-[140px]"
+          >
+            <option value="">All Genres</option>
+            {filterOptions?.genres?.map((genre) => (
+              <option key={genre} value={genre}>{genre}</option>
+            ))}
+          </select>
+          <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+        </div>
+
+        {/* Artist Filter */}
+        <div className="relative">
+          <select
+            value={artistFilter}
+            onChange={(e) => handleFilterChange(setArtistFilter)(e.target.value)}
+            className="pl-4 pr-10 py-2 bg-gray-800 border border-gray-700 rounded-lg appearance-none focus:outline-none focus:border-primary-500 min-w-[160px]"
+          >
+            <option value="">All Artists</option>
+            {filterOptions?.artists?.map((artist) => (
+              <option key={artist} value={artist}>{artist}</option>
+            ))}
+          </select>
+          <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+        </div>
+
+        {/* Album Filter */}
+        <div className="relative">
+          <select
+            value={albumFilter}
+            onChange={(e) => handleFilterChange(setAlbumFilter)(e.target.value)}
+            className="pl-4 pr-10 py-2 bg-gray-800 border border-gray-700 rounded-lg appearance-none focus:outline-none focus:border-primary-500 min-w-[160px]"
+          >
+            <option value="">All Albums</option>
+            {filterOptions?.albums?.map((album) => (
+              <option key={album} value={album}>{album}</option>
+            ))}
+          </select>
+          <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+        </div>
+
+        {/* Clear Filters */}
+        {(genreFilter || artistFilter || albumFilter) && (
+          <button
+            onClick={() => {
+              setGenreFilter('')
+              setArtistFilter('')
+              setAlbumFilter('')
+              setCurrentPage(0)
+            }}
+            className="px-3 py-2 text-sm text-gray-400 hover:text-white flex items-center gap-1"
+          >
+            <X className="w-4 h-4" />
+            Clear Filters
+          </button>
+        )}
+
+        {/* Page Size */}
+        <div className="relative ml-auto">
+          <select
+            value={pageSize}
+            onChange={(e) => {
+              setPageSize(Number(e.target.value))
+              setCurrentPage(0)
+            }}
+            className="pl-4 pr-10 py-2 bg-gray-800 border border-gray-700 rounded-lg appearance-none focus:outline-none focus:border-primary-500"
+          >
+            {pageSizeOptions.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label} per page
               </option>
             ))}
           </select>
@@ -252,6 +372,48 @@ function Tracks() {
           </div>
         )}
       </div>
+
+      {/* Pagination Controls */}
+      {tracks?.length > 0 && pageSize < 10000 && (
+        <div className="flex items-center justify-between border-t border-gray-700 pt-4">
+          <div className="text-sm text-gray-400">
+            Showing {currentPage * pageSize + 1} - {Math.min((currentPage + 1) * pageSize, stats?.total || 0)} of {stats?.total || 0}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setCurrentPage(0)}
+              disabled={currentPage === 0}
+              className="px-3 py-1 bg-gray-800 border border-gray-700 rounded text-sm disabled:opacity-50 disabled:cursor-not-allowed hover:border-gray-600"
+            >
+              First
+            </button>
+            <button
+              onClick={() => setCurrentPage(p => Math.max(0, p - 1))}
+              disabled={currentPage === 0}
+              className="p-2 bg-gray-800 border border-gray-700 rounded disabled:opacity-50 disabled:cursor-not-allowed hover:border-gray-600"
+            >
+              <ChevronLeft className="w-4 h-4" />
+            </button>
+            <span className="px-4 py-1 text-sm">
+              Page {currentPage + 1} of {Math.ceil((stats?.total || 0) / pageSize)}
+            </span>
+            <button
+              onClick={() => setCurrentPage(p => p + 1)}
+              disabled={(currentPage + 1) * pageSize >= (stats?.total || 0)}
+              className="p-2 bg-gray-800 border border-gray-700 rounded disabled:opacity-50 disabled:cursor-not-allowed hover:border-gray-600"
+            >
+              <ChevronRight className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => setCurrentPage(Math.ceil((stats?.total || 0) / pageSize) - 1)}
+              disabled={(currentPage + 1) * pageSize >= (stats?.total || 0)}
+              className="px-3 py-1 bg-gray-800 border border-gray-700 rounded text-sm disabled:opacity-50 disabled:cursor-not-allowed hover:border-gray-600"
+            >
+              Last
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

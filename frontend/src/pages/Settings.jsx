@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { 
   Folder, 
@@ -11,9 +11,14 @@ import {
   RefreshCw,
   AlertTriangle,
   CheckCircle2,
-  Database
+  Database,
+  FileText,
+  Settings as SettingsIcon,
+  Download,
+  Filter
 } from 'lucide-react'
-import { getSettings, updateSettings, listDirectories, resyncDatabase } from '../api'
+import { getSettings, updateSettings, listDirectories, resyncDatabase, getLogs, clearLogs } from '../api'
+import ProgressButton from '../components/ProgressButton'
 
 function DirectoryBrowser({ currentPath, onSelect }) {
   const { data: dirs, isLoading } = useQuery({
@@ -56,10 +61,13 @@ function DirectoryBrowser({ currentPath, onSelect }) {
 
 function Settings() {
   const queryClient = useQueryClient()
+  const [activeTab, setActiveTab] = useState('settings') // 'settings' or 'logs'
   const [showDirBrowser, setShowDirBrowser] = useState(false)
   const [browsingPath, setBrowsingPath] = useState('/')
   const [browsingIndex, setBrowsingIndex] = useState(0)  // Which directory we're browsing for
   const [resyncResult, setResyncResult] = useState(null)
+  const [logLevel, setLogLevel] = useState('')
+  const logContainerRef = useRef(null)
 
   const { data: settings, isLoading } = useQuery({
     queryKey: ['settings'],
@@ -98,6 +106,28 @@ function Settings() {
       setResyncResult({ error: error.message || 'Resync failed' })
     }
   })
+
+  // Logs query
+  const { data: logsData, isLoading: isLoadingLogs, refetch: refetchLogs } = useQuery({
+    queryKey: ['logs', logLevel],
+    queryFn: () => getLogs(500, logLevel || null),
+    enabled: activeTab === 'logs',
+    refetchInterval: activeTab === 'logs' ? 5000 : false, // Auto-refresh every 5s when viewing logs
+  })
+
+  const clearLogsMutation = useMutation({
+    mutationFn: clearLogs,
+    onSuccess: () => {
+      queryClient.invalidateQueries(['logs'])
+    },
+  })
+
+  // Auto-scroll logs to bottom
+  useEffect(() => {
+    if (logContainerRef.current && logsData?.logs) {
+      logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight
+    }
+  }, [logsData?.logs])
 
   const handleSubmit = (e) => {
     e.preventDefault()
@@ -148,6 +178,29 @@ function Settings() {
     return <div className="text-center py-12 text-gray-400">Loading...</div>
   }
 
+  // Helper to get log level color
+  const getLogLevelColor = (line) => {
+    if (line.includes('| ERROR')) return 'text-red-400'
+    if (line.includes('| WARNING')) return 'text-yellow-400'
+    if (line.includes('| INFO')) return 'text-blue-400'
+    if (line.includes('| DEBUG')) return 'text-gray-500'
+    return 'text-gray-300'
+  }
+
+  // Download logs
+  const downloadLogs = () => {
+    if (!logsData?.logs) return
+    const blob = new Blob([logsData.logs.join('\n')], { type: 'text/plain' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `dj-set-tagger-logs-${new Date().toISOString().split('T')[0]}.log`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+  }
+
   return (
     <div className="space-y-6">
       <div>
@@ -155,20 +208,49 @@ function Settings() {
         <p className="text-gray-400 mt-1">Configure application settings</p>
       </div>
 
-      <form onSubmit={handleSubmit} className="space-y-6">
-        {/* Music Directories */}
-        <div className="bg-gray-800 rounded-xl p-6 border border-gray-700">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-semibold">Music Directories</h2>
-            <button
-              type="button"
-              onClick={addMountPoint}
-              className="flex items-center gap-1 px-3 py-1.5 bg-primary-600 hover:bg-primary-700 rounded-lg text-sm"
-            >
-              <Plus className="w-4 h-4" />
-              Add Mount Point
-            </button>
-          </div>
+      {/* Tabs */}
+      <div className="flex gap-2 border-b border-gray-700">
+        <button
+          onClick={() => setActiveTab('settings')}
+          className={`px-4 py-2 flex items-center gap-2 border-b-2 transition-colors ${
+            activeTab === 'settings'
+              ? 'border-primary-500 text-white'
+              : 'border-transparent text-gray-400 hover:text-white'
+          }`}
+        >
+          <SettingsIcon className="w-4 h-4" />
+          Settings
+        </button>
+        <button
+          onClick={() => setActiveTab('logs')}
+          className={`px-4 py-2 flex items-center gap-2 border-b-2 transition-colors ${
+            activeTab === 'logs'
+              ? 'border-primary-500 text-white'
+              : 'border-transparent text-gray-400 hover:text-white'
+          }`}
+        >
+          <FileText className="w-4 h-4" />
+          Logs
+        </button>
+      </div>
+
+      {/* Settings Tab */}
+      {activeTab === 'settings' && (
+        <>
+          <form onSubmit={handleSubmit} className="space-y-6">
+            {/* Music Directories */}
+            <div className="bg-gray-800 rounded-xl p-6 border border-gray-700">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-lg font-semibold">Music Directories</h2>
+                <button
+                  type="button"
+                  onClick={addMountPoint}
+                  className="flex items-center gap-1 px-3 py-1.5 bg-primary-600 hover:bg-primary-700 rounded-lg text-sm"
+                >
+                  <Plus className="w-4 h-4" />
+                  Add Mount Point
+                </button>
+              </div>
           
           <div className="space-y-3">
             {formData.music_dirs.map((dir, index) => (
@@ -322,14 +404,15 @@ function Settings() {
 
         {/* Save Button */}
         <div className="flex gap-4">
-          <button
+          <ProgressButton
             type="submit"
-            disabled={updateMutation.isPending}
-            className="px-6 py-2 bg-primary-600 hover:bg-primary-700 rounded-lg flex items-center gap-2 disabled:opacity-50"
+            isLoading={updateMutation.isPending}
+            loadingText="Saving..."
+            icon={<Save className="w-4 h-4" />}
+            variant="primary"
           >
-            <Save className="w-4 h-4" />
-            {updateMutation.isPending ? 'Saving...' : 'Save Settings'}
-          </button>
+            Save Settings
+          </ProgressButton>
           
           <button
             type="button"
@@ -373,26 +456,18 @@ function Settings() {
               database is out of sync with your files.
             </p>
             
-            <button
+            <ProgressButton
               onClick={() => {
                 setResyncResult(null)
                 resyncMutation.mutate()
               }}
-              disabled={resyncMutation.isPending}
-              className="px-4 py-2 bg-amber-600 hover:bg-amber-700 rounded-lg flex items-center gap-2 disabled:opacity-50"
+              isLoading={resyncMutation.isPending}
+              loadingText="Resyncing database..."
+              icon={<RefreshCw className="w-4 h-4" />}
+              variant="warning"
             >
-              {resyncMutation.isPending ? (
-                <>
-                  <RefreshCw className="w-4 h-4 animate-spin" />
-                  Resyncing...
-                </>
-              ) : (
-                <>
-                  <RefreshCw className="w-4 h-4" />
-                  Resync Database
-                </>
-              )}
-            </button>
+              Resync Database
+            </ProgressButton>
           </div>
           
           {resyncResult && (
@@ -435,6 +510,95 @@ function Settings() {
           )}
         </div>
       </div>
+        </>
+      )}
+
+      {/* Logs Tab */}
+      {activeTab === 'logs' && (
+        <div className="space-y-4">
+          {/* Log Controls */}
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="relative">
+                <Filter className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                <select
+                  value={logLevel}
+                  onChange={(e) => setLogLevel(e.target.value)}
+                  className="pl-10 pr-8 py-2 bg-gray-800 border border-gray-700 rounded-lg appearance-none focus:outline-none focus:border-primary-500"
+                >
+                  <option value="">All Levels</option>
+                  <option value="DEBUG">Debug</option>
+                  <option value="INFO">Info</option>
+                  <option value="WARNING">Warning</option>
+                  <option value="ERROR">Error</option>
+                </select>
+              </div>
+              
+              <button
+                onClick={() => refetchLogs()}
+                className="px-3 py-2 bg-gray-800 border border-gray-700 hover:border-gray-600 rounded-lg flex items-center gap-2"
+              >
+                <RefreshCw className={`w-4 h-4 ${isLoadingLogs ? 'animate-spin' : ''}`} />
+                Refresh
+              </button>
+            </div>
+            
+            <div className="flex items-center gap-2">
+              <button
+                onClick={downloadLogs}
+                disabled={!logsData?.logs?.length}
+                className="px-3 py-2 bg-gray-800 border border-gray-700 hover:border-gray-600 rounded-lg flex items-center gap-2 disabled:opacity-50"
+              >
+                <Download className="w-4 h-4" />
+                Download
+              </button>
+              
+              <button
+                onClick={() => {
+                  if (confirm('Clear all logs?')) {
+                    clearLogsMutation.mutate()
+                  }
+                }}
+                disabled={clearLogsMutation.isPending}
+                className="px-3 py-2 bg-red-600/20 hover:bg-red-600/30 text-red-400 border border-red-900 rounded-lg flex items-center gap-2"
+              >
+                <Trash2 className="w-4 h-4" />
+                Clear
+              </button>
+            </div>
+          </div>
+          
+          {/* Log Info */}
+          {logsData && (
+            <div className="text-sm text-gray-400">
+              Showing {logsData.showing} of {logsData.total_lines} log entries
+              {logLevel && ` (filtered by ${logLevel})`}
+            </div>
+          )}
+          
+          {/* Log Output */}
+          <div 
+            ref={logContainerRef}
+            className="bg-gray-900 rounded-xl border border-gray-700 p-4 h-[600px] overflow-auto font-mono text-sm"
+          >
+            {isLoadingLogs ? (
+              <div className="text-gray-400 text-center py-8">Loading logs...</div>
+            ) : logsData?.logs?.length > 0 ? (
+              <div className="space-y-1">
+                {logsData.logs.map((line, i) => (
+                  <div key={i} className={`${getLogLevelColor(line)} whitespace-pre-wrap break-all`}>
+                    {line}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="text-gray-400 text-center py-8">
+                {logsData?.message || 'No logs available'}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

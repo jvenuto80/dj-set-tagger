@@ -891,7 +891,7 @@ class GoogleSearchService:
     def __init__(self):
         self.search = GoogleTracklistSearch()
     
-    async def search_cover_art(self, query: str, num_results: int = 12) -> List[Dict]:
+    async def search_cover_art(self, query: str, num_results: int = 20) -> List[Dict]:
         """
         Search for cover art images by scraping pages from web search results
         
@@ -941,7 +941,7 @@ class GoogleSearchService:
                     links = soup.select('a.result-link') or soup.select('td a[href^="http"]')
                     logger.debug(f"Found {len(links)} DDG links for covers")
                     
-                    for link in links[:5]:
+                    for link in links[:10]:
                         href = link.get('href', '')
                         if not href.startswith('http') or 'duckduckgo.com' in href:
                             continue
@@ -1052,7 +1052,7 @@ class GoogleSearchService:
         except Exception as e:
             logger.debug(f"Error extracting covers from {url}: {e}")
         
-        return covers[:3]  # Return max 3 per page
+        return covers[:5]  # Return max 5 per page
     
     def _is_valid_image_url(self, url: str) -> bool:
         """Check if URL is likely a valid cover image"""

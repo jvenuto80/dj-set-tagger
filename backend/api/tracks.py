@@ -1,7 +1,7 @@
 """
 Tracks API endpoints
 """
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, BackgroundTasks
 from typing import List, Optional
 from backend.services.database import get_db
 from backend.models.track import Track, TrackResponse, TrackUpdate
@@ -30,38 +30,68 @@ def get_min_duration_seconds() -> int:
 @router.get("/", response_model=List[TrackResponse])
 async def get_tracks(
     skip: int = Query(0, ge=0),
-    limit: int = Query(100, ge=1, le=500),
+    limit: int = Query(100, ge=1, le=10000),
     status: Optional[str] = Query(None, description="Filter by status: pending, matched, tagged, error"),
     search: Optional[str] = Query(None, description="Search in filename or title"),
+    genre: Optional[str] = Query(None, description="Filter by genre"),
+    artist: Optional[str] = Query(None, description="Filter by artist"),
+    album: Optional[str] = Query(None, description="Filter by album"),
     apply_duration_filter: bool = Query(True, description="Apply minimum duration filter from settings")
 ):
     """Get all scanned tracks with optional filtering"""
+    from sqlalchemy import func
+    
     async with get_db() as db:
         query = select(Track)
+        count_query = select(func.count(Track.id))
         
         if status:
             query = query.where(Track.status == status)
+            count_query = count_query.where(Track.status == status)
         
         if search:
             search_term = f"%{search}%"
-            query = query.where(
+            search_filter = (
                 (Track.filename.ilike(search_term)) | 
                 (Track.title.ilike(search_term)) |
                 (Track.artist.ilike(search_term))
             )
+            query = query.where(search_filter)
+            count_query = count_query.where(search_filter)
+        
+        # Filter by genre (check both matched_genre and genre)
+        if genre:
+            genre_filter = (Track.matched_genre == genre) | (Track.genre == genre)
+            query = query.where(genre_filter)
+            count_query = count_query.where(genre_filter)
+        
+        # Filter by artist (check both matched_artist and artist)
+        if artist:
+            artist_filter = (Track.matched_artist == artist) | (Track.artist == artist)
+            query = query.where(artist_filter)
+            count_query = count_query.where(artist_filter)
+        
+        # Filter by album (check both matched_album and album)
+        if album:
+            album_filter = (Track.matched_album == album) | (Track.album == album)
+            query = query.where(album_filter)
+            count_query = count_query.where(album_filter)
         
         # Apply minimum duration filter
         if apply_duration_filter:
             min_duration = get_min_duration_seconds()
             if min_duration > 0:
                 query = query.where(Track.duration >= min_duration)
+                count_query = count_query.where(Track.duration >= min_duration)
+        
+        # Get total count before pagination
+        total = await db.scalar(count_query)
         
         query = query.offset(skip).limit(limit)
         result = await db.execute(query)
         tracks = result.scalars().all()
         
         return [TrackResponse.model_validate(t) for t in tracks]
-
 
 @router.get("/stats")
 async def get_track_stats():
@@ -110,6 +140,72 @@ async def get_track_stats():
             "tagged": tagged or 0,
             "errors": errors or 0
         }
+
+
+@router.get("/filters")
+async def get_track_filters():
+    """Get unique values for filter dropdowns (genres, artists, albums)"""
+    from sqlalchemy import func, distinct
+    
+    async with get_db() as db:
+        min_duration = get_min_duration_seconds()
+        
+        # Base query with duration filter
+        base_filter = Track.duration >= min_duration if min_duration > 0 else True
+        
+        # Get unique genres (prefer matched_genre, fallback to genre)
+        genre_query = select(distinct(func.coalesce(Track.matched_genre, Track.genre))).where(
+            base_filter
+        ).where(
+            func.coalesce(Track.matched_genre, Track.genre).isnot(None)
+        ).where(
+            func.coalesce(Track.matched_genre, Track.genre) != ''
+        )
+        genre_result = await db.execute(genre_query)
+        genres = sorted([g for (g,) in genre_result.fetchall() if g])
+        
+        # Get unique artists (prefer matched_artist, fallback to artist)
+        artist_query = select(distinct(func.coalesce(Track.matched_artist, Track.artist))).where(
+            base_filter
+        ).where(
+            func.coalesce(Track.matched_artist, Track.artist).isnot(None)
+        ).where(
+            func.coalesce(Track.matched_artist, Track.artist) != ''
+        )
+        artist_result = await db.execute(artist_query)
+        artists = sorted([a for (a,) in artist_result.fetchall() if a])
+        
+        # Get unique albums (prefer matched_album, fallback to album)
+        album_query = select(distinct(func.coalesce(Track.matched_album, Track.album))).where(
+            base_filter
+        ).where(
+            func.coalesce(Track.matched_album, Track.album).isnot(None)
+        ).where(
+            func.coalesce(Track.matched_album, Track.album) != ''
+        )
+        album_result = await db.execute(album_query)
+        albums = sorted([a for (a,) in album_result.fetchall() if a])
+        
+        return {
+            "genres": genres,
+            "artists": artists,
+            "albums": albums
+        }
+
+
+# NOTE: This route MUST come before /{track_id} routes to avoid being matched as a track_id
+@router.get("/cover-search")
+async def search_cover_art_by_query(query: str = Query(..., description="Search query for cover art")):
+    """Search for cover art by query string (not tied to a specific track)"""
+    from backend.services.google_search import GoogleSearchService
+    
+    search_service = GoogleSearchService()
+    try:
+        covers = await search_service.search_cover_art(query)
+        return covers
+    except Exception as e:
+        logger.error(f"Cover art search error: {e}")
+        return []
 
 
 @router.get("/{track_id}", response_model=TrackResponse)
@@ -345,6 +441,10 @@ async def detect_series(min_tracks: int = Query(2, description="Minimum tracks t
                     'current_album': track.album,
                     'matched_album': track.matched_album,
                     'current_artist': track.artist,
+                    'current_genre': track.genre,
+                    'matched_genre': track.matched_genre,
+                    'current_album_artist': track.album_artist,
+                    'matched_album_artist': track.matched_album_artist,
                     'episode': episode,
                     'directory': track.directory,
                 })
@@ -359,6 +459,10 @@ async def detect_series(min_tracks: int = Query(2, description="Minimum tracks t
                 'current_album': track.album,
                 'matched_album': track.matched_album,
                 'current_artist': track.artist,
+                'current_genre': track.genre,
+                'matched_genre': track.matched_genre,
+                'current_album_artist': track.album_artist,
+                'matched_album_artist': track.matched_album_artist,
                 'episode': None,
                 'directory': track.directory,
             })
@@ -380,9 +484,10 @@ async def detect_series(min_tracks: int = Query(2, description="Minimum tracks t
                     dir_name = re.sub(r'^\d+\s*[-_]\s*', '', dir_name)  # Remove leading numbers
                     normalized_dir = re.sub(r'[^\w\s]', '', dir_name.lower()).strip()
                     if normalized_dir and len(normalized_dir) > 3:
-                        series_groups[f"dir:{normalized_dir}"] = new_tracks
+                        # Add album_artist fields to directory-based tracks
                         for t in new_tracks:
                             t['display_name'] = dir_name
+                        series_groups[f"dir:{normalized_dir}"] = new_tracks
         
         # METHOD 3: Try to merge similar series using fuzzy matching
         series_keys = list(series_groups.keys())
@@ -426,9 +531,25 @@ async def detect_series(min_tracks: int = Query(2, description="Minimum tracks t
                     artist_counts[a] += 1
                 suggested_artist = max(artist_counts.keys(), key=lambda x: artist_counts[x]) if artist_counts else 'Various'
                 
+                # Get most common genre (prefer matched_genre, fall back to current_genre)
+                genres = [t.get('matched_genre') or t.get('current_genre') for t in track_list if t.get('matched_genre') or t.get('current_genre')]
+                genre_counts = defaultdict(int)
+                for g in genres:
+                    genre_counts[g] += 1
+                suggested_genre = max(genre_counts.keys(), key=lambda x: genre_counts[x]) if genre_counts else ''
+                
+                # Get most common album_artist (prefer matched_album_artist, fall back to current_album_artist)
+                album_artists = [t.get('matched_album_artist') or t.get('current_album_artist') for t in track_list if t.get('matched_album_artist') or t.get('current_album_artist')]
+                album_artist_counts = defaultdict(int)
+                for aa in album_artists:
+                    album_artist_counts[aa] += 1
+                suggested_album_artist = max(album_artist_counts.keys(), key=lambda x: album_artist_counts[x]) if album_artist_counts else ''
+                
                 for t in track_list:
                     t['suggested_album'] = series_name
                     t['suggested_artist'] = suggested_artist
+                    t['suggested_genre'] = suggested_genre
+                    t['suggested_album_artist'] = suggested_album_artist
                 
                 # Deduplicate tracks by ID
                 seen_ids = set()
@@ -444,7 +565,9 @@ async def detect_series(min_tracks: int = Query(2, description="Minimum tracks t
                         'track_count': len(unique_tracks),
                         'tracks': sorted(unique_tracks, key=lambda x: (int(x['episode']) if x['episode'] and x['episode'].isdigit() else 0, x['filename'])),
                         'suggested_album': series_name,
-                        'suggested_artist': suggested_artist
+                        'suggested_artist': suggested_artist,
+                        'suggested_genre': suggested_genre,
+                        'suggested_album_artist': suggested_album_artist
                     })
         
         return sorted(series_list, key=lambda x: -x['track_count'])
@@ -510,17 +633,18 @@ async def get_tagged_series(min_tracks: int = Query(2, description="Minimum trac
         result = await db.execute(query)
         tracks = result.scalars().all()
         
-        # Group by album + artist combination (since they're already tagged)
-        album_artist_groups = defaultdict(list)
+        # Group by album + artist + genre combination (since they're already tagged)
+        album_artist_genre_groups = defaultdict(list)
         
         for track in tracks:
             album_key = track.matched_album or track.album or 'Unknown'
             artist_key = track.matched_artist or track.artist or 'Unknown'
-            # Create composite key for album + artist
-            group_key = (album_key, artist_key)
+            genre_key = track.matched_genre or track.genre or ''
+            # Create composite key for album + artist + genre
+            group_key = (album_key, artist_key, genre_key)
             display_name, normalized, episode = extract_series_name(track.filename)
             
-            album_artist_groups[group_key].append({
+            album_artist_genre_groups[group_key].append({
                 'track_id': track.id,
                 'filename': track.filename,
                 'display_name': display_name,
@@ -528,19 +652,36 @@ async def get_tagged_series(min_tracks: int = Query(2, description="Minimum trac
                 'matched_album': track.matched_album,
                 'current_artist': track.artist,
                 'matched_artist': track.matched_artist,
+                'current_genre': track.genre,
+                'matched_genre': track.matched_genre,
+                'current_album_artist': track.album_artist,
+                'matched_album_artist': track.matched_album_artist,
                 'episode': episode,
                 'directory': track.directory,
             })
         
         # Build series list
         series_list = []
-        for (album_name, artist_name), track_list in album_artist_groups.items():
+        for (album_name, artist_name, genre_name), track_list in album_artist_genre_groups.items():
             if len(track_list) >= min_tracks:
-                # Display name shows both album and artist if they differ
+                # Display name shows album, artist, and genre if set
+                display_parts = [album_name]
                 if artist_name and artist_name != 'Unknown' and artist_name != 'Various':
-                    display_name = f"{album_name} ({artist_name})"
+                    display_parts.append(artist_name)
+                if genre_name:
+                    display_parts.append(genre_name)
+                
+                if len(display_parts) > 1:
+                    display_name = f"{display_parts[0]} ({', '.join(display_parts[1:])})"
                 else:
                     display_name = album_name
+                
+                # Get most common album_artist from tagged series tracks
+                album_artists = [t.get('matched_album_artist') or t.get('current_album_artist') for t in track_list if t.get('matched_album_artist') or t.get('current_album_artist')]
+                album_artist_counts = defaultdict(int)
+                for aa in album_artists:
+                    album_artist_counts[aa] += 1
+                suggested_album_artist = max(album_artist_counts.keys(), key=lambda x: album_artist_counts[x]) if album_artist_counts else ''
                 
                 series_list.append({
                     'series_name': display_name,
@@ -548,20 +689,73 @@ async def get_tagged_series(min_tracks: int = Query(2, description="Minimum trac
                     'tracks': sorted(track_list, key=lambda x: (int(x['episode']) if x['episode'] and x['episode'].isdigit() else 0, x['filename'])),
                     'suggested_album': album_name,
                     'suggested_artist': artist_name,
+                    'suggested_genre': genre_name,
+                    'suggested_album_artist': suggested_album_artist,
                     'is_tagged': True
                 })
         
         return sorted(series_list, key=lambda x: -x['track_count'])
 
 
+# Job status tracking for background tagging operations
+import uuid
+from datetime import datetime
+
+tagging_jobs = {}  # job_id -> job status dict
+
+
 @router.post("/series/apply-album")
 async def apply_series_album_endpoint(
+    background_tasks: BackgroundTasks,
     track_ids: List[int],
     album: str = Query(..., description="Album name to apply"),
-    artist: Optional[str] = Query(None, description="Artist name to apply")
+    artist: Optional[str] = Query(None, description="Artist name to apply"),
+    genre: Optional[str] = Query(None, description="Genre to apply"),
+    album_artist: Optional[str] = Query(None, description="Album Artist to apply"),
+    cover_url: Optional[str] = Query(None, description="Cover art URL to download and embed")
 ):
-    """Apply album (and optionally artist) to multiple tracks and write to files immediately.
-    Only updates database if file write succeeds to keep them in sync."""
+    """Apply album (and optionally artist/genre/album_artist/cover) to multiple tracks.
+    Runs in background for large batches. Returns a job_id to poll for status."""
+    
+    # For small batches (< 5 tracks), run synchronously for instant feedback
+    if len(track_ids) < 5:
+        return await _apply_series_sync(track_ids, album, artist, genre, album_artist, cover_url)
+    
+    # For larger batches, run in background
+    job_id = str(uuid.uuid4())[:8]
+    tagging_jobs[job_id] = {
+        'status': 'starting',
+        'total': len(track_ids),
+        'processed': 0,
+        'written': 0,
+        'errors': [],
+        'started_at': datetime.now().isoformat(),
+        'completed_at': None
+    }
+    
+    background_tasks.add_task(
+        _apply_series_background,
+        job_id, track_ids, album, artist, genre, album_artist, cover_url
+    )
+    
+    return {
+        "message": f"Tagging {len(track_ids)} tracks in background",
+        "job_id": job_id,
+        "background": True
+    }
+
+
+@router.get("/series/apply-album/status/{job_id}")
+async def get_tagging_job_status(job_id: str):
+    """Get status of a background tagging job"""
+    if job_id not in tagging_jobs:
+        # Return a not_found status instead of 404, so frontend can clean up gracefully
+        return {"status": "not_found", "job_id": job_id}
+    return tagging_jobs[job_id]
+
+
+async def _apply_series_sync(track_ids, album, artist, genre, album_artist, cover_url):
+    """Synchronous version for small batches"""
     from backend.services.tagger import AudioTagger
     
     tagger = AudioTagger()
@@ -569,7 +763,17 @@ async def apply_series_album_endpoint(
     errors = []
     successful_track_ids = []
     
-    # Build track info list first
+    # Download cover art once if URL provided
+    cover_data = None
+    if cover_url:
+        try:
+            cover_data = await tagger.download_cover_art(cover_url)
+            if cover_data:
+                cover_data = tagger.resize_cover_art(cover_data)
+        except Exception as e:
+            logger.error(f"Failed to download cover art: {e}")
+    
+    # Build track info list
     tracks_to_process = []
     async with get_db() as db:
         for track_id in track_ids:
@@ -582,60 +786,170 @@ async def apply_series_album_endpoint(
                     'filename': track.filename
                 })
     
-    # Try to write to each file first
+    # Process files
     for track_info in tracks_to_process:
         try:
-            success = await tagger.write_album_artist(track_info['filepath'], album, artist)
+            success = await tagger.write_album_artist_cover(
+                track_info['filepath'], album, artist, genre, album_artist, cover_data
+            )
             if success:
                 written += 1
                 successful_track_ids.append(track_info['track_id'])
             else:
                 errors.append({'filename': track_info['filename'], 'error': 'Write failed'})
-        except PermissionError:
-            errors.append({'filename': track_info['filename'], 'error': 'Permission denied - check file/folder permissions'})
-            logger.error(f"Permission denied writing tags to {track_info['filepath']}")
         except Exception as e:
-            error_msg = str(e)
-            errors.append({'filename': track_info['filename'], 'error': error_msg})
-            logger.error(f"Failed to write tags to {track_info['filepath']}: {e}")
+            errors.append({'filename': track_info['filename'], 'error': str(e)})
     
-    # Only update database for tracks where file write succeeded
-    updated = 0
+    # Update database
     if successful_track_ids:
         async with get_db() as db:
             for track_id in successful_track_ids:
                 result = await db.execute(select(Track).where(Track.id == track_id))
                 track = result.scalar_one_or_none()
-                
                 if track:
                     track.matched_album = album
                     track.album = album
                     if artist:
                         track.matched_artist = artist
                         track.artist = artist
+                    if genre:
+                        track.matched_genre = genre
+                        track.genre = genre
+                    if album_artist:
+                        track.matched_album_artist = album_artist
+                        track.album_artist = album_artist
+                    if cover_url:
+                        track.matched_cover_url = cover_url
                     if track.status == "pending":
                         track.status = "matched"
                     track.series_tagged = True
-                    updated += 1
-            
             await db.commit()
     
-    # Build response message
-    if errors:
-        if written > 0:
-            message = f"Tagged {written} tracks successfully. {len(errors)} failed (not updated in database)."
-        else:
-            message = f"Failed to tag any tracks. {len(errors)} errors occurred."
-    else:
-        message = f"Successfully tagged {updated} tracks"
-    
+    message = f"Successfully tagged {written} tracks" if not errors else f"Tagged {written} tracks, {len(errors)} errors"
     return {
-        "message": message, 
-        "updated": updated,
+        "message": message,
+        "updated": written,
         "written": written,
         "errors": errors,
         "total_files": len(tracks_to_process)
     }
+
+
+async def _apply_series_background(job_id, track_ids, album, artist, genre, album_artist, cover_url):
+    """Background task for tagging large batches - processes files concurrently"""
+    import asyncio
+    from concurrent.futures import ThreadPoolExecutor
+    from backend.services.tagger import AudioTagger
+    
+    job = tagging_jobs[job_id]
+    job['status'] = 'downloading_cover'
+    
+    tagger = AudioTagger()
+    successful_track_ids = []
+    
+    # Download cover art once
+    cover_data = None
+    if cover_url:
+        try:
+            cover_data = await tagger.download_cover_art(cover_url)
+            if cover_data:
+                cover_data = tagger.resize_cover_art(cover_data)
+                logger.info(f"[Job {job_id}] Downloaded cover art")
+        except Exception as e:
+            logger.error(f"[Job {job_id}] Failed to download cover art: {e}")
+    
+    job['status'] = 'loading_tracks'
+    
+    # Build track info list
+    tracks_to_process = []
+    async with get_db() as db:
+        for track_id in track_ids:
+            result = await db.execute(select(Track).where(Track.id == track_id))
+            track = result.scalar_one_or_none()
+            if track:
+                tracks_to_process.append({
+                    'track_id': track.id,
+                    'filepath': track.filepath,
+                    'filename': track.filename
+                })
+    
+    job['status'] = 'tagging'
+    job['total'] = len(tracks_to_process)
+    
+    # Process files one at a time with timeout for network shares
+    FILE_TIMEOUT = 120  # 2 minute timeout per file
+    
+    for i, track_info in enumerate(tracks_to_process):
+        try:
+            logger.info(f"[Job {job_id}] Processing {i+1}/{len(tracks_to_process)}: {track_info['filename']}")
+            
+            # Use timeout to prevent hanging on slow network shares
+            try:
+                success = await asyncio.wait_for(
+                    tagger.write_album_artist_cover(
+                        track_info['filepath'], album, artist, genre, album_artist, cover_data
+                    ),
+                    timeout=FILE_TIMEOUT
+                )
+            except asyncio.TimeoutError:
+                logger.error(f"[Job {job_id}] Timeout writing to {track_info['filename']}")
+                success = False
+            
+            if success:
+                job['written'] += 1
+                successful_track_ids.append(track_info['track_id'])
+            else:
+                job['errors'].append({'filename': track_info['filename'], 'error': 'Write failed or timed out'})
+                
+        except Exception as e:
+            logger.error(f"[Job {job_id}] Error tagging {track_info['filename']}: {e}")
+            job['errors'].append({'filename': track_info['filename'], 'error': str(e)})
+        
+        job['processed'] = i + 1
+        
+        # Yield to allow other tasks to run
+        await asyncio.sleep(0.01)
+    
+    job['status'] = 'updating_database'
+    
+    # Update database in a single transaction
+    if successful_track_ids:
+        async with get_db() as db:
+            # Use bulk update for efficiency
+            result = await db.execute(
+                select(Track).where(Track.id.in_(successful_track_ids))
+            )
+            tracks = result.scalars().all()
+            
+            for track in tracks:
+                track.matched_album = album
+                track.album = album
+                if artist:
+                    track.matched_artist = artist
+                    track.artist = artist
+                if genre:
+                    track.matched_genre = genre
+                    track.genre = genre
+                if album_artist:
+                    track.matched_album_artist = album_artist
+                    track.album_artist = album_artist
+                if cover_url:
+                    track.matched_cover_url = cover_url
+                if track.status == "pending":
+                    track.status = "matched"
+                track.series_tagged = True
+            
+            await db.commit()
+    
+    job['status'] = 'completed'
+    job['completed_at'] = datetime.now().isoformat()
+    
+    logger.info(f"[Job {job_id}] Completed: {job['written']}/{job['total']} tracks tagged")
+    
+    # Clean up old jobs after 5 minutes
+    await asyncio.sleep(300)
+    if job_id in tagging_jobs:
+        del tagging_jobs[job_id]
 
 
 @router.post("/resync")

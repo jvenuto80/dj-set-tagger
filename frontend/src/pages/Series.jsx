@@ -12,9 +12,13 @@ import {
   X,
   CheckCircle2,
   AlertTriangle,
-  XCircle
+  XCircle,
+  Image
 } from 'lucide-react'
 import { detectSeries, getTaggedSeries, applySeriesAlbum } from '../api'
+import ProgressButton from '../components/ProgressButton'
+import CoverArtModal from '../components/CoverArtModal'
+import { useJob } from '../contexts/JobContext'
 
 // Toast notification component for errors
 function ErrorToast({ errors, onClose, message }) {
@@ -76,24 +80,36 @@ function SeriesCard({ series, seriesIndex, onApply, applyingIndex }) {
   )
   const [albumName, setAlbumName] = useState(series.suggested_album)
   const [artistName, setArtistName] = useState(series.suggested_artist)
+  const [genreName, setGenreName] = useState(series.suggested_genre || '')
+  const [albumArtistName, setAlbumArtistName] = useState(series.suggested_album_artist || '')
+  const [coverUrl, setCoverUrl] = useState('')
+  const [showCoverModal, setShowCoverModal] = useState(false)
   
   // Track if user has manually edited the inputs
   const [userEditedAlbum, setUserEditedAlbum] = useState(false)
   const [userEditedArtist, setUserEditedArtist] = useState(false)
+  const [userEditedGenre, setUserEditedGenre] = useState(false)
+  const [userEditedAlbumArtist, setUserEditedAlbumArtist] = useState(false)
   
   const isApplying = applyingIndex === seriesIndex
   
   // Reset selection when tracks change, but preserve user-edited values
   useEffect(() => {
     setSelectedTracks(series.tracks.map(t => t.track_id))
-    // Only reset album/artist if user hasn't manually edited them
+    // Only reset album/artist/genre/albumArtist if user hasn't manually edited them
     if (!userEditedAlbum) {
       setAlbumName(series.suggested_album)
     }
     if (!userEditedArtist) {
       setArtistName(series.suggested_artist)
     }
-  }, [series.tracks, series.suggested_album, series.suggested_artist])
+    if (!userEditedGenre) {
+      setGenreName(series.suggested_genre || '')
+    }
+    if (!userEditedAlbumArtist) {
+      setAlbumArtistName(series.suggested_album_artist || '')
+    }
+  }, [series.tracks, series.suggested_album, series.suggested_artist, series.suggested_genre, series.suggested_album_artist])
 
   const toggleTrack = (trackId) => {
     setSelectedTracks(prev => 
@@ -150,8 +166,8 @@ function SeriesCard({ series, seriesIndex, onApply, applyingIndex }) {
       {/* Expanded Content */}
       {isExpanded && (
         <div className="border-t border-gray-700 p-4 space-y-4">
-          {/* Album/Artist inputs */}
-          <div className="grid grid-cols-2 gap-4">
+          {/* Album/Artist/Genre/Album Artist inputs */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
             <div>
               <label className="text-sm text-gray-400">Album Name</label>
               <input
@@ -165,7 +181,7 @@ function SeriesCard({ series, seriesIndex, onApply, applyingIndex }) {
               />
             </div>
             <div>
-              <label className="text-sm text-gray-400">Artist (optional)</label>
+              <label className="text-sm text-gray-400">Artist</label>
               <input
                 type="text"
                 value={artistName}
@@ -176,6 +192,58 @@ function SeriesCard({ series, seriesIndex, onApply, applyingIndex }) {
                 className="w-full mt-1 px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:border-primary-500"
               />
             </div>
+            <div>
+              <label className="text-sm text-gray-400">Album Artist</label>
+              <input
+                type="text"
+                value={albumArtistName}
+                onChange={(e) => {
+                  setAlbumArtistName(e.target.value)
+                  setUserEditedAlbumArtist(true)
+                }}
+                placeholder="e.g. Various Artists"
+                className="w-full mt-1 px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:border-primary-500"
+              />
+            </div>
+            <div>
+              <label className="text-sm text-gray-400">Genre</label>
+              <input
+                type="text"
+                value={genreName}
+                onChange={(e) => {
+                  setGenreName(e.target.value)
+                  setUserEditedGenre(true)
+                }}
+                placeholder="e.g. Progressive House"
+                className="w-full mt-1 px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:border-primary-500"
+              />
+            </div>
+          </div>
+
+          {/* Cover Art */}
+          <div className="flex items-center gap-4">
+            <button
+              onClick={() => setShowCoverModal(true)}
+              className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg flex items-center gap-2"
+            >
+              <Image className="w-4 h-4" />
+              {coverUrl ? 'Change Cover' : 'Add Cover Art'}
+            </button>
+            {coverUrl && (
+              <div className="flex items-center gap-3">
+                <img
+                  src={coverUrl}
+                  alt="Selected cover"
+                  className="w-10 h-10 rounded object-cover"
+                />
+                <button
+                  onClick={() => setCoverUrl('')}
+                  className="text-sm text-red-400 hover:text-red-300"
+                >
+                  Remove
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Selection controls */}
@@ -236,23 +304,30 @@ function SeriesCard({ series, seriesIndex, onApply, applyingIndex }) {
           </div>
 
           {/* Apply button */}
-          <button
+          <ProgressButton
             onClick={(e) => {
               e.stopPropagation()
-              onApply(seriesIndex, selectedTracks, albumName, artistName)
+              onApply(seriesIndex, selectedTracks, albumName, artistName, genreName, albumArtistName, coverUrl)
             }}
-            disabled={selectedTracks.length === 0 || isApplying}
-            className="w-full px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-700 disabled:text-gray-500 rounded-lg flex items-center justify-center gap-2"
+            disabled={selectedTracks.length === 0}
+            isLoading={isApplying}
+            loadingText={`Applying to ${selectedTracks.length} tracks...`}
+            icon={<Check className="w-4 h-4" />}
+            variant="success"
+            className="w-full"
           >
-            {isApplying ? (
-              <Loader2 className="w-4 h-4 animate-spin" />
-            ) : (
-              <Check className="w-4 h-4" />
-            )}
-            Apply Album to {selectedTracks.length} Tracks
-          </button>
+            Apply Album to {selectedTracks.length} Tracks{coverUrl ? ' + Cover' : ''}
+          </ProgressButton>
         </div>
       )}
+
+      {/* Cover Art Modal */}
+      <CoverArtModal
+        isOpen={showCoverModal}
+        onClose={() => setShowCoverModal(false)}
+        onSelect={(url) => setCoverUrl(url)}
+        defaultQuery={`${artistName || ''} ${albumName || ''}`.trim()}
+      />
     </div>
   )
 }
@@ -265,6 +340,10 @@ function TaggedSeriesCard({ series, onApply, applyingIndex, seriesIndex }) {
   )
   const [albumName, setAlbumName] = useState(series.suggested_album)
   const [artistName, setArtistName] = useState(series.suggested_artist || '')
+  const [genreName, setGenreName] = useState(series.suggested_genre || '')
+  const [albumArtistName, setAlbumArtistName] = useState(series.suggested_album_artist || '')
+  const [coverUrl, setCoverUrl] = useState('')
+  const [showCoverModal, setShowCoverModal] = useState(false)
   
   const isApplying = applyingIndex === seriesIndex
 
@@ -350,9 +429,9 @@ function TaggedSeriesCard({ series, onApply, applyingIndex, seriesIndex }) {
             )}
           </div>
 
-          {/* Album/Artist inputs (only when editing) */}
+          {/* Album/Artist/Album Artist/Genre inputs (only when editing) */}
           {isEditing && (
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
               <div>
                 <label className="text-sm text-gray-400">Album Name</label>
                 <input
@@ -364,7 +443,7 @@ function TaggedSeriesCard({ series, onApply, applyingIndex, seriesIndex }) {
                 />
               </div>
               <div>
-                <label className="text-sm text-gray-400">Artist (optional)</label>
+                <label className="text-sm text-gray-400">Artist</label>
                 <input
                   type="text"
                   value={artistName}
@@ -373,6 +452,62 @@ function TaggedSeriesCard({ series, onApply, applyingIndex, seriesIndex }) {
                   className="w-full mt-1 px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:border-primary-500"
                 />
               </div>
+              <div>
+                <label className="text-sm text-gray-400">Album Artist</label>
+                <input
+                  type="text"
+                  value={albumArtistName}
+                  onChange={(e) => setAlbumArtistName(e.target.value)}
+                  onClick={(e) => e.stopPropagation()}
+                  placeholder="e.g. Various Artists"
+                  className="w-full mt-1 px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:border-primary-500"
+                />
+              </div>
+              <div>
+                <label className="text-sm text-gray-400">Genre</label>
+                <input
+                  type="text"
+                  value={genreName}
+                  onChange={(e) => setGenreName(e.target.value)}
+                  onClick={(e) => e.stopPropagation()}
+                  placeholder="e.g. Progressive House"
+                  className="w-full mt-1 px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:border-primary-500"
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Cover Art (only when editing) */}
+          {isEditing && (
+            <div className="flex items-center gap-4">
+              <button
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setShowCoverModal(true)
+                }}
+                className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg flex items-center gap-2"
+              >
+                <Image className="w-4 h-4" />
+                {coverUrl ? 'Change Cover' : 'Add Cover Art'}
+              </button>
+              {coverUrl && (
+                <div className="flex items-center gap-3">
+                  <img
+                    src={coverUrl}
+                    alt="Selected cover"
+                    className="w-10 h-10 rounded object-cover"
+                  />
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      setCoverUrl('')
+                    }}
+                    className="text-sm text-red-400 hover:text-red-300"
+                  >
+                    Remove
+                  </button>
+                </div>
+              )}
             </div>
           )}
 
@@ -421,35 +556,55 @@ function TaggedSeriesCard({ series, onApply, applyingIndex, seriesIndex }) {
 
           {/* Apply button (only when editing) */}
           {isEditing && (
-            <button
+            <ProgressButton
               onClick={(e) => {
                 e.stopPropagation()
-                onApply(seriesIndex, selectedTracks, albumName, artistName)
+                onApply(seriesIndex, selectedTracks, albumName, artistName, genreName, albumArtistName, coverUrl)
               }}
-              disabled={selectedTracks.length === 0 || isApplying}
-              className="w-full px-4 py-2 bg-primary-600 hover:bg-primary-700 disabled:bg-gray-700 disabled:text-gray-500 rounded-lg flex items-center justify-center gap-2"
+              disabled={selectedTracks.length === 0}
+              isLoading={isApplying}
+              loadingText={`Re-tagging ${selectedTracks.length} tracks...`}
+              icon={<Check className="w-4 h-4" />}
+              variant="primary"
+              className="w-full"
             >
-              {isApplying ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : (
-                <Check className="w-4 h-4" />
-              )}
-              Re-tag {selectedTracks.length} Tracks
-            </button>
+              Re-tag {selectedTracks.length} Tracks{coverUrl ? ' + Cover' : ''}
+            </ProgressButton>
           )}
         </div>
       )}
+
+      {/* Cover Art Modal */}
+      <CoverArtModal
+        isOpen={showCoverModal}
+        onClose={() => setShowCoverModal(false)}
+        onSelect={(url) => setCoverUrl(url)}
+        defaultQuery={`${artistName || ''} ${albumName || ''}`.trim()}
+      />
     </div>
   )
 }
 
 function Series() {
   const queryClient = useQueryClient()
+  const { backgroundJob, toast: jobToast, clearToast: clearJobToast, startPolling } = useJob()
   const [applyingIndex, setApplyingIndex] = useState(null)
   const [applyingTaggedIndex, setApplyingTaggedIndex] = useState(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [activeTab, setActiveTab] = useState('untagged') // 'untagged' or 'tagged'
-  const [toast, setToast] = useState(null) // { type: 'error' | 'success', message, errors? }
+  const [localToast, setLocalToast] = useState(null)
+
+  // Combine job toast with local toast
+  const toast = jobToast || localToast
+  const clearToast = jobToast ? clearJobToast : () => setLocalToast(null)
+
+  // Clear applying state when job completes
+  useEffect(() => {
+    if (backgroundJob?.status === 'completed' || backgroundJob?.status === 'not_found' || !backgroundJob) {
+      setApplyingIndex(null)
+      setApplyingTaggedIndex(null)
+    }
+  }, [backgroundJob])
 
   const { data: series, isLoading, error } = useQuery({
     queryKey: ['series'],
@@ -462,8 +617,16 @@ function Series() {
   })
 
   const applyMutation = useMutation({
-    mutationFn: ({ trackIds, album, artist }) => applySeriesAlbum(trackIds, album, artist),
+    mutationFn: ({ trackIds, album, artist, genre, albumArtist, coverUrl }) => applySeriesAlbum(trackIds, album, artist, genre, albumArtist, coverUrl),
     onSuccess: (data) => {
+      // Check if this is a background job
+      if (data.background && data.job_id) {
+        // Start polling via context (handles localStorage)
+        startPolling(data.job_id)
+        return // Don't clear applying state yet
+      }
+      
+      // Synchronous completion
       setApplyingIndex(null)
       setApplyingTaggedIndex(null)
       queryClient.invalidateQueries(['series'])
@@ -472,13 +635,13 @@ function Series() {
       
       // Check if there were errors writing to files
       if (data.errors && data.errors.length > 0) {
-        setToast({
+        setLocalToast({
           type: 'error',
           message: `${data.written}/${data.total_files} files written. ${data.errors.length} errors:`,
           errors: data.errors
         })
       } else {
-        setToast({
+        setLocalToast({
           type: 'success',
           message: data.message || `Successfully updated ${data.updated} tracks`
         })
@@ -487,7 +650,7 @@ function Series() {
     onError: (error) => {
       setApplyingIndex(null)
       setApplyingTaggedIndex(null)
-      setToast({
+      setLocalToast({
         type: 'error',
         message: 'Failed to apply changes',
         errors: [{ filename: 'API Error', error: error.message || 'Unknown error' }]
@@ -495,14 +658,14 @@ function Series() {
     },
   })
 
-  const handleApply = (index, trackIds, album, artist) => {
+  const handleApply = (index, trackIds, album, artist, genre, albumArtist, coverUrl) => {
     setApplyingIndex(index)
-    applyMutation.mutate({ trackIds, album, artist })
+    applyMutation.mutate({ trackIds, album, artist, genre, albumArtist, coverUrl })
   }
 
-  const handleApplyTagged = (index, trackIds, album, artist) => {
+  const handleApplyTagged = (index, trackIds, album, artist, genre, albumArtist, coverUrl) => {
     setApplyingTaggedIndex(index)
-    applyMutation.mutate({ trackIds, album, artist })
+    applyMutation.mutate({ trackIds, album, artist, genre, albumArtist, coverUrl })
   }
 
   // Filter series based on search query
@@ -565,6 +728,43 @@ function Series() {
           Apply consistent album names to group episodes together.
         </p>
       </div>
+
+      {/* Background Job Progress */}
+      {backgroundJob && (
+        <div className="bg-primary-900/30 border border-primary-700/50 rounded-xl p-4">
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-3">
+              <Loader2 className="w-5 h-5 animate-spin text-primary-400" />
+              <span className="font-medium">
+                {backgroundJob.status === 'starting' && 'Starting...'}
+                {backgroundJob.status === 'resuming' && 'Resuming...'}
+                {backgroundJob.status === 'downloading_cover' && 'Downloading cover art...'}
+                {backgroundJob.status === 'loading_tracks' && 'Loading tracks...'}
+                {backgroundJob.status === 'tagging' && 'Tagging files...'}
+                {backgroundJob.status === 'updating_database' && 'Updating database...'}
+                {backgroundJob.status === 'completed' && 'Complete!'}
+                {!['starting', 'resuming', 'downloading_cover', 'loading_tracks', 'tagging', 'updating_database', 'completed'].includes(backgroundJob.status) && 
+                  `Processing... (${backgroundJob.status || 'unknown'})`}
+              </span>
+            </div>
+            <span className="text-sm text-gray-400">
+              {backgroundJob.processed || 0}/{backgroundJob.total || 0} files
+            </span>
+          </div>
+          <div className="w-full bg-gray-700 rounded-full h-2 overflow-hidden">
+            <div 
+              className="bg-primary-500 h-2 transition-all duration-300 ease-out"
+              style={{ width: `${backgroundJob.total > 0 ? (backgroundJob.processed / backgroundJob.total) * 100 : 0}%` }}
+            />
+          </div>
+          {backgroundJob.written > 0 && (
+            <div className="mt-2 text-sm text-gray-400">
+              {backgroundJob.written} files written successfully
+              {backgroundJob.errors?.length > 0 && `, ${backgroundJob.errors.length} errors`}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="flex gap-2 border-b border-gray-700">
