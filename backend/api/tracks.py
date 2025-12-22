@@ -304,7 +304,10 @@ async def delete_track(track_id: int):
 
 
 @router.get("/series/detect")
-async def detect_series(min_tracks: int = Query(2, description="Minimum tracks to form a series")):
+async def detect_series(
+    min_tracks: int = Query(2, description="Minimum tracks to form a series"),
+    include_tagged: bool = Query(False, description="Include already series-tagged tracks in detection")
+):
     """Detect podcast/radio show series dynamically by analyzing filename patterns and directories"""
     import re
     from collections import defaultdict
@@ -316,8 +319,10 @@ async def detect_series(min_tracks: int = Query(2, description="Minimum tracks t
         """Clean filename for comparison"""
         # Remove file extension
         name = re.sub(r'\.(mp3|flac|wav|m4a|aac|ogg)$', '', filename, flags=re.IGNORECASE)
-        # Clean up underscores and multiple spaces
+        # Clean up underscores, hyphens (when used as word separators), and multiple spaces
         name = re.sub(r'_', ' ', name)
+        # Replace hyphens between words (but keep "word - word" style separators)
+        name = re.sub(r'(?<=\w)-(?=\w)', ' ', name)
         name = re.sub(r'\s+', ' ', name).strip()
         return name
     
@@ -395,7 +400,18 @@ async def detect_series(min_tracks: int = Query(2, description="Minimum tracks t
             return 0.0
         intersection = len(tokens1 & tokens2)
         union = len(tokens1 | tokens2)
-        return intersection / union if union > 0 else 0.0
+        jaccard = intersection / union if union > 0 else 0.0
+        
+        # Also check if one is a subset of the other (e.g., "patterns" subset of "gai barone patterns")
+        # If the smaller set is fully contained in the larger, that's a strong match
+        smaller, larger = (tokens1, tokens2) if len(tokens1) <= len(tokens2) else (tokens2, tokens1)
+        if smaller and smaller.issubset(larger):
+            # Full containment - return high score based on how much of the larger is covered
+            containment_score = len(smaller) / len(larger)
+            # Use the better of Jaccard or containment, but boost containment
+            return max(jaccard, 0.5 + containment_score * 0.5)
+        
+        return jaccard
     
     def find_common_prefix(names: list) -> str:
         """Find common prefix among a list of names"""
@@ -416,11 +432,15 @@ async def detect_series(min_tracks: int = Query(2, description="Minimum tracks t
         return names[0]
     
     async with get_db() as db:
-        # Build query with duration filter and exclude already series-tagged tracks
-        # Use or_ to handle NULL values (series_tagged IS NULL OR series_tagged = False)
-        query = select(Track).where(
-            or_(Track.series_tagged == False, Track.series_tagged == None)
-        )
+        # Build query with duration filter
+        query = select(Track)
+        
+        # Optionally exclude already series-tagged tracks
+        if not include_tagged:
+            query = query.where(
+                or_(Track.series_tagged == False, Track.series_tagged == None)
+            )
+        
         if min_duration > 0:
             query = query.where(Track.duration >= min_duration)
         
@@ -509,47 +529,120 @@ async def detect_series(min_tracks: int = Query(2, description="Minimum tracks t
         for key in merged:
             del series_groups[key]
         
+        # METHOD 4: Find orphan tracks that match existing TAGGED series
+        # This helps when you add a single new file that belongs to an already-tagged series
+        if not include_tagged:
+            # Get all tagged series albums
+            tagged_query = select(Track).where(Track.series_tagged == True)
+            if min_duration > 0:
+                tagged_query = tagged_query.where(Track.duration >= min_duration)
+            tagged_result = await db.execute(tagged_query)
+            tagged_tracks = tagged_result.scalars().all()
+            
+            # Build a map of album names to their metadata
+            tagged_series_map = {}  # normalized album name -> {album, artist, genre, album_artist, tracks}
+            for track in tagged_tracks:
+                album = track.matched_album or track.album
+                if album:
+                    album_normalized = re.sub(r'[^\w\s]', '', album.lower()).strip()
+                    if album_normalized not in tagged_series_map:
+                        tagged_series_map[album_normalized] = {
+                            'album': album,
+                            'artist': track.matched_artist or track.artist,
+                            'genre': track.matched_genre or track.genre or '',
+                            'album_artist': track.matched_album_artist or track.album_artist or '',
+                            'cover_url': track.matched_cover_url,
+                            'tracks': []
+                        }
+            
+            # Check untagged tracks that aren't in any series yet
+            for track in tracks:
+                if track.id in existing_track_ids:
+                    continue  # Already in a series group
+                
+                display_name, normalized, episode = extract_series_name(track.filename)
+                
+                # Check if this track's normalized name matches any tagged series
+                for album_normalized, series_info in tagged_series_map.items():
+                    if similarity_score(normalized, album_normalized) > 0.5:
+                        # Found a match! Add as a single-track "series" with suggestion to add to existing
+                        orphan_key = f"orphan:{track.id}"
+                        series_groups[orphan_key] = [{
+                            'track_id': track.id,
+                            'filename': track.filename,
+                            'display_name': display_name,
+                            'current_album': track.album,
+                            'matched_album': track.matched_album,
+                            'current_artist': track.artist,
+                            'current_genre': track.genre,
+                            'matched_genre': track.matched_genre,
+                            'current_album_artist': track.album_artist,
+                            'matched_album_artist': track.matched_album_artist,
+                            'episode': episode,
+                            'directory': track.directory,
+                            'suggested_album': series_info['album'],
+                            'suggested_artist': series_info['artist'],
+                            'suggested_genre': series_info['genre'],
+                            'suggested_album_artist': series_info['album_artist'],
+                            'matched_series': series_info['album'],  # Mark that this matches an existing series
+                        }]
+                        existing_track_ids.add(track.id)
+                        break
+        
         # Build final series list
         series_list = []
         for normalized, track_list in series_groups.items():
-            if len(track_list) >= min_tracks:
-                display_names = [t['display_name'] for t in track_list]
-                
-                name_counts = defaultdict(int)
-                for n in display_names:
-                    name_counts[n] += 1
-                
-                if max(name_counts.values()) > 1:
-                    series_name = max(name_counts.keys(), key=lambda x: name_counts[x])
+            # For orphan tracks (single tracks matching existing series), allow min_tracks=1
+            is_orphan = normalized.startswith('orphan:')
+            effective_min = 1 if is_orphan else min_tracks
+            
+            if len(track_list) >= effective_min:
+                # Check if tracks already have suggestions (orphans do)
+                if track_list[0].get('matched_series'):
+                    # Orphan track - use the pre-set suggestions
+                    series_name = track_list[0]['suggested_album']
+                    suggested_artist = track_list[0]['suggested_artist']
+                    suggested_genre = track_list[0]['suggested_genre']
+                    suggested_album_artist = track_list[0]['suggested_album_artist']
                 else:
-                    series_name = find_common_prefix(display_names)
-                
-                # Get most common artist
-                artists = [t['current_artist'] for t in track_list if t['current_artist']]
-                artist_counts = defaultdict(int)
-                for a in artists:
-                    artist_counts[a] += 1
-                suggested_artist = max(artist_counts.keys(), key=lambda x: artist_counts[x]) if artist_counts else 'Various'
-                
-                # Get most common genre (prefer matched_genre, fall back to current_genre)
-                genres = [t.get('matched_genre') or t.get('current_genre') for t in track_list if t.get('matched_genre') or t.get('current_genre')]
-                genre_counts = defaultdict(int)
-                for g in genres:
-                    genre_counts[g] += 1
-                suggested_genre = max(genre_counts.keys(), key=lambda x: genre_counts[x]) if genre_counts else ''
-                
-                # Get most common album_artist (prefer matched_album_artist, fall back to current_album_artist)
-                album_artists = [t.get('matched_album_artist') or t.get('current_album_artist') for t in track_list if t.get('matched_album_artist') or t.get('current_album_artist')]
-                album_artist_counts = defaultdict(int)
-                for aa in album_artists:
-                    album_artist_counts[aa] += 1
-                suggested_album_artist = max(album_artist_counts.keys(), key=lambda x: album_artist_counts[x]) if album_artist_counts else ''
+                    display_names = [t['display_name'] for t in track_list]
+                    
+                    name_counts = defaultdict(int)
+                    for n in display_names:
+                        name_counts[n] += 1
+                    
+                    if max(name_counts.values()) > 1:
+                        series_name = max(name_counts.keys(), key=lambda x: name_counts[x])
+                    else:
+                        series_name = find_common_prefix(display_names)
+                    
+                    # Get most common artist
+                    artists = [t['current_artist'] for t in track_list if t['current_artist']]
+                    artist_counts = defaultdict(int)
+                    for a in artists:
+                        artist_counts[a] += 1
+                    suggested_artist = max(artist_counts.keys(), key=lambda x: artist_counts[x]) if artist_counts else 'Various'
+                    
+                    # Get most common genre (prefer matched_genre, fall back to current_genre)
+                    genres = [t.get('matched_genre') or t.get('current_genre') for t in track_list if t.get('matched_genre') or t.get('current_genre')]
+                    genre_counts = defaultdict(int)
+                    for g in genres:
+                        genre_counts[g] += 1
+                    suggested_genre = max(genre_counts.keys(), key=lambda x: genre_counts[x]) if genre_counts else ''
+                    
+                    # Get most common album_artist (prefer matched_album_artist, fall back to current_album_artist)
+                    album_artists = [t.get('matched_album_artist') or t.get('current_album_artist') for t in track_list if t.get('matched_album_artist') or t.get('current_album_artist')]
+                    album_artist_counts = defaultdict(int)
+                    for aa in album_artists:
+                        album_artist_counts[aa] += 1
+                    suggested_album_artist = max(album_artist_counts.keys(), key=lambda x: album_artist_counts[x]) if album_artist_counts else ''
                 
                 for t in track_list:
-                    t['suggested_album'] = series_name
-                    t['suggested_artist'] = suggested_artist
-                    t['suggested_genre'] = suggested_genre
-                    t['suggested_album_artist'] = suggested_album_artist
+                    if not t.get('matched_series'):  # Don't overwrite orphan suggestions
+                        t['suggested_album'] = series_name
+                        t['suggested_artist'] = suggested_artist
+                        t['suggested_genre'] = suggested_genre
+                        t['suggested_album_artist'] = suggested_album_artist
                 
                 # Deduplicate tracks by ID
                 seen_ids = set()
@@ -559,8 +652,8 @@ async def detect_series(min_tracks: int = Query(2, description="Minimum tracks t
                         seen_ids.add(t['track_id'])
                         unique_tracks.append(t)
                 
-                if len(unique_tracks) >= min_tracks:
-                    series_list.append({
+                if len(unique_tracks) >= effective_min:
+                    series_entry = {
                         'series_name': series_name,
                         'track_count': len(unique_tracks),
                         'tracks': sorted(unique_tracks, key=lambda x: (int(x['episode']) if x['episode'] and x['episode'].isdigit() else 0, x['filename'])),
@@ -568,9 +661,14 @@ async def detect_series(min_tracks: int = Query(2, description="Minimum tracks t
                         'suggested_artist': suggested_artist,
                         'suggested_genre': suggested_genre,
                         'suggested_album_artist': suggested_album_artist
-                    })
+                    }
+                    # Mark if this is an orphan track suggestion
+                    if is_orphan:
+                        series_entry['is_orphan'] = True
+                        series_entry['matched_series'] = track_list[0].get('matched_series')
+                    series_list.append(series_entry)
         
-        return sorted(series_list, key=lambda x: -x['track_count'])
+        return sorted(series_list, key=lambda x: (-1 if x.get('is_orphan') else 0, -x['track_count']))
 
 
 @router.get("/series/tagged")

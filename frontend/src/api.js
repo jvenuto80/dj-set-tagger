@@ -148,8 +148,10 @@ export const updateTrackCover = async (trackId, coverUrl) => {
 }
 
 // Series Detection
-export const detectSeries = async () => {
-  const { data } = await api.get('/tracks/series/detect')
+export const detectSeries = async (includeTagged = false) => {
+  const { data } = await api.get('/tracks/series/detect', {
+    params: { include_tagged: includeTagged }
+  })
   return data
 }
 

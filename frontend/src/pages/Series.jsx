@@ -13,7 +13,8 @@ import {
   CheckCircle2,
   AlertTriangle,
   XCircle,
-  Image
+  Image,
+  RefreshCw
 } from 'lucide-react'
 import { detectSeries, getTaggedSeries, applySeriesAlbum } from '../api'
 import ProgressButton from '../components/ProgressButton'
@@ -139,18 +140,36 @@ function SeriesCard({ series, seriesIndex, onApply, applyingIndex }) {
         onClick={() => setIsExpanded(!isExpanded)}
       >
         <div className="flex items-center gap-4">
-          <div className="w-12 h-12 bg-gradient-to-br from-primary-500 to-purple-600 rounded-lg flex items-center justify-center">
+          <div className={`w-12 h-12 rounded-lg flex items-center justify-center ${
+            series.is_orphan 
+              ? 'bg-gradient-to-br from-yellow-500 to-orange-600' 
+              : 'bg-gradient-to-br from-primary-500 to-purple-600'
+          }`}>
             <Disc3 className="w-6 h-6" />
           </div>
           <div>
-            <h3 className="font-semibold text-lg">{series.series_name}</h3>
+            <h3 className="font-semibold text-lg">
+              {series.series_name}
+              {series.is_orphan && (
+                <span className="ml-2 text-xs font-normal text-yellow-400">
+                  → Add to existing series
+                </span>
+              )}
+            </h3>
             <p className="text-sm text-gray-400">
-              {series.track_count} episodes found • {needsUpdate} need album update
+              {series.track_count} {series.track_count === 1 ? 'episode' : 'episodes'} found
+              {series.matched_series && ` • Matches "${series.matched_series}"`}
+              {!series.is_orphan && ` • ${needsUpdate} need album update`}
             </p>
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {needsUpdate > 0 && (
+          {series.is_orphan && (
+            <span className="px-2 py-1 bg-yellow-500/20 text-yellow-400 text-xs rounded-full">
+              New episode
+            </span>
+          )}
+          {!series.is_orphan && needsUpdate > 0 && (
             <span className="px-2 py-1 bg-yellow-500/20 text-yellow-400 text-xs rounded-full">
               {needsUpdate} to update
             </span>
@@ -602,6 +621,8 @@ function Series() {
   const queryClient = useQueryClient()
   const { backgroundJob, toast: jobToast, clearToast: clearJobToast, startPolling } = useJob()
   const [applyingIndex, setApplyingIndex] = useState(null)
+  const [includeTagged, setIncludeTagged] = useState(false)
+  const [isReEvaluating, setIsReEvaluating] = useState(false)
   const [applyingTaggedIndex, setApplyingTaggedIndex] = useState(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [activeTab, setActiveTab] = useState('untagged') // 'untagged' or 'tagged'
@@ -621,7 +642,7 @@ function Series() {
 
   const { data: series, isLoading, error } = useQuery({
     queryKey: ['series'],
-    queryFn: detectSeries,
+    queryFn: () => detectSeries(false),
   })
 
   const { data: taggedSeries, isLoading: isLoadingTagged } = useQuery({
@@ -734,12 +755,44 @@ function Series() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold">Series Detection</h1>
-        <p className="text-gray-400 mt-1">
-          Automatically detected podcast and radio show series in your library. 
-          Apply consistent album names to group episodes together.
-        </p>
+      <div className="flex items-start justify-between">
+        <div>
+          <h1 className="text-2xl font-bold">Series Detection</h1>
+          <p className="text-gray-400 mt-1">
+            Automatically detected podcast and radio show series in your library. 
+            Apply consistent album names to group episodes together.
+          </p>
+        </div>
+        <div className="flex items-center gap-3">
+          <label className="flex items-center gap-2 text-sm text-gray-400 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={includeTagged}
+              onChange={(e) => setIncludeTagged(e.target.checked)}
+              className="rounded border-gray-600 bg-gray-700 text-primary-500 focus:ring-primary-500"
+            />
+            Include tagged
+          </label>
+          <button
+            onClick={async () => {
+              setIsReEvaluating(true)
+              try {
+                // Fetch fresh data with the include_tagged param
+                const freshData = await detectSeries(includeTagged)
+                queryClient.setQueryData(['series'], freshData)
+                queryClient.invalidateQueries(['taggedSeries'])
+              } finally {
+                setIsReEvaluating(false)
+              }
+            }}
+            disabled={isLoading || isLoadingTagged || isReEvaluating}
+            className="flex items-center gap-2 px-4 py-2 bg-primary-600 hover:bg-primary-500 disabled:bg-gray-700 disabled:cursor-not-allowed rounded-lg transition-colors"
+            title="Re-evaluate series detection"
+          >
+            <RefreshCw className={`w-4 h-4 ${(isLoading || isLoadingTagged || isReEvaluating) ? 'animate-spin' : ''}`} />
+            <span>Re-evaluate</span>
+          </button>
+        </div>
       </div>
 
       {/* Background Job Progress */}

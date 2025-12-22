@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { 
@@ -96,7 +96,14 @@ function MatchCard({ match, isSelected, onSelect }) {
           onClick={(e) => e.stopPropagation()}
           className="mt-2 text-xs text-primary-400 hover:text-primary-300 flex items-center gap-1"
         >
-          View on 1001Tracklists <ExternalLink className="w-3 h-3" />
+          View on {(() => {
+            try {
+              const domain = new URL(match.tracklist_url).hostname.replace('www.', '')
+              return domain
+            } catch {
+              return 'source'
+            }
+          })()} <ExternalLink className="w-3 h-3" />
         </a>
       )}
     </div>
@@ -113,6 +120,7 @@ function TrackDetail() {
   const [coverOptions, setCoverOptions] = useState([])
   const [isLoadingCovers, setIsLoadingCovers] = useState(false)
   const [isSearching, setIsSearching] = useState(false)
+  const initialMatchCount = useRef(0)
 
   const { data: track, isLoading } = useQuery({
     queryKey: ['track', id],
@@ -138,40 +146,51 @@ function TrackDetail() {
   const matchMutation = useMutation({
     mutationFn: () => matchTrack(id),
     onMutate: () => {
+      // Capture current match count before search starts
+      initialMatchCount.current = matches?.length ?? 0
       setIsSearching(true)
-      // Auto-stop searching after 60 seconds as fallback
-      setTimeout(() => {
-        setIsSearching(false)
-        refetchMatches()
-      }, 60000)
     },
     onSuccess: () => {
       queryClient.invalidateQueries(['track', id])
-      // Don't stop searching yet - keep polling until results arrive
     },
     onError: () => {
       setIsSearching(false)
     },
   })
 
-  // Stop searching when we get results, but do a final refetch
-  useEffect(() => {
-    if (isSearching && matches && matches.length > 0) {
-      setIsSearching(false)
-      // Results already in state, no need to refetch
-    }
-  }, [isSearching, matches])
-  
-  // Also poll periodically after search starts to catch results
+  // Poll for results while searching
   useEffect(() => {
     if (!isSearching) return
     
-    const interval = setInterval(() => {
-      refetchMatches()
-    }, 3000)
+    let pollCount = 0
+    const maxPolls = 30 // 30 polls * 2 seconds = 60 seconds max
+    const startCount = initialMatchCount.current
+    
+    const interval = setInterval(async () => {
+      pollCount++
+      
+      // Force invalidate to trigger re-render
+      await queryClient.invalidateQueries(['matches', id])
+      
+      // Fetch fresh data directly
+      const freshMatches = await queryClient.fetchQuery({
+        queryKey: ['matches', id],
+        queryFn: () => getMatchResults(id),
+      })
+      
+      const currentCount = freshMatches?.length ?? 0
+      
+      console.log(`Poll ${pollCount}: startCount=${startCount}, currentCount=${currentCount}`)
+      
+      // Stop if we got new results or reached max polls
+      if (currentCount > startCount || pollCount >= maxPolls) {
+        setIsSearching(false)
+        clearInterval(interval)
+      }
+    }, 2000)
     
     return () => clearInterval(interval)
-  }, [isSearching, refetchMatches])
+  }, [isSearching, id, queryClient])
 
   const selectMatchMutation = useMutation({
     mutationFn: (matchId) => selectMatch(id, matchId),
