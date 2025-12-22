@@ -371,7 +371,20 @@ function TaggedSeriesCard({ series, onApply, applyingIndex, seriesIndex }) {
         onClick={() => setIsExpanded(!isExpanded)}
       >
         <div className="flex items-center gap-4">
-          <div className="w-12 h-12 bg-gradient-to-br from-green-500 to-emerald-600 rounded-lg flex items-center justify-center">
+          {series.cover_url ? (
+            <img 
+              src={series.cover_url} 
+              alt={series.series_name}
+              className="w-12 h-12 rounded-lg object-cover"
+              onError={(e) => {
+                e.target.style.display = 'none'
+                e.target.nextSibling.style.display = 'flex'
+              }}
+            />
+          ) : null}
+          <div 
+            className={`w-12 h-12 bg-gradient-to-br from-green-500 to-emerald-600 rounded-lg items-center justify-center ${series.cover_url ? 'hidden' : 'flex'}`}
+          >
             <CheckCircle2 className="w-6 h-6" />
           </div>
           <div>

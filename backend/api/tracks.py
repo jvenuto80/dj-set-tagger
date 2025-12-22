@@ -656,6 +656,7 @@ async def get_tagged_series(min_tracks: int = Query(2, description="Minimum trac
                 'matched_genre': track.matched_genre,
                 'current_album_artist': track.album_artist,
                 'matched_album_artist': track.matched_album_artist,
+                'matched_cover_url': track.matched_cover_url,
                 'episode': episode,
                 'directory': track.directory,
             })
@@ -683,6 +684,12 @@ async def get_tagged_series(min_tracks: int = Query(2, description="Minimum trac
                     album_artist_counts[aa] += 1
                 suggested_album_artist = max(album_artist_counts.keys(), key=lambda x: album_artist_counts[x]) if album_artist_counts else ''
                 
+                # Check if all tracks share the same cover URL
+                cover_urls = [t.get('matched_cover_url') for t in track_list if t.get('matched_cover_url')]
+                shared_cover_url = None
+                if cover_urls and len(set(cover_urls)) == 1:
+                    shared_cover_url = cover_urls[0]
+                
                 series_list.append({
                     'series_name': display_name,
                     'track_count': len(track_list),
@@ -691,6 +698,7 @@ async def get_tagged_series(min_tracks: int = Query(2, description="Minimum trac
                     'suggested_artist': artist_name,
                     'suggested_genre': genre_name,
                     'suggested_album_artist': suggested_album_artist,
+                    'cover_url': shared_cover_url,
                     'is_tagged': True
                 })
         

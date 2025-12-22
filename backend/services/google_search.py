@@ -781,26 +781,42 @@ class GoogleTracklistSearch:
         # Build search queries - try multiple variations
         queries = []
         
-        # Query 1: Artist + title + tracklist
+        # Extract key terms from filename for better matching
+        key_terms = ""
+        if filename:
+            # Get the distinctive part of the filename (often the set/mix name)
+            clean_name = re.sub(r'\.(mp3|flac|wav|m4a)$', '', filename, flags=re.IGNORECASE)
+            clean_name = re.sub(r'^\d+[-_\s]*', '', clean_name)  # Remove track numbers
+            clean_name = re.sub(r'\s*\(\d{4}[-/]\d{2}[-/]\d{2}\)', '', clean_name)  # Remove dates in parens
+            clean_name = re.sub(r'\s*Part\s*\d+\s*$', '', clean_name, flags=re.IGNORECASE)  # Remove Part X
+            clean_name = clean_name.replace('_', ' ').replace(' - ', ' ')
+            key_terms = clean_name.strip()
+        
+        # Query 1: Artist + title/filename with tracklist keyword
         if artist or title:
             query = self._build_search_query(artist, title or filename)
             queries.append(query)
         
-        # Query 2: Filename-based search
-        if filename:
-            # Clean filename for search
-            clean_name = re.sub(r'\.(mp3|flac|wav|m4a)$', '', filename, flags=re.IGNORECASE)
-            clean_name = re.sub(r'^\d+[-_\s]*', '', clean_name)
-            clean_name = clean_name.replace('_', ' ').replace('-', ' ')
-            queries.append(f'{clean_name} tracklist')
+        # Query 2: Key terms without quotes (catches name variations like "J. Scott G." -> "Jesse Scott Giaquinta")
+        if key_terms:
+            queries.append(f'{key_terms} tracklist')
         
         # Query 3: Site-specific search for 1001tracklists
         if artist:
             queries.append(f'site:1001tracklists.com "{artist}"')
         
+        # Query 4: Site-specific search for MixesDB (great for older/obscure mixes)
+        if key_terms:
+            queries.append(f'site:mixesdb.com {key_terms}')
+        
+        # Query 5: If we have both artist and a distinctive title, try without artist
+        if artist and title and len(title) > 10:
+            clean_title = re.sub(r'\.(mp3|flac|wav|m4a)$', '', title, flags=re.IGNORECASE)
+            queries.append(f'{clean_title} dj mix tracklist')
+        
         # Execute searches
         seen_urls = set()
-        for query in queries[:3]:  # Limit to 3 queries
+        for query in queries[:5]:  # Limit to 5 queries
             try:
                 search_results = await self.search_google(query, num_results=5)
                 

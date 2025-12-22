@@ -171,7 +171,7 @@ class TrackMatcher:
             for result in google_results:
                 # Calculate match score
                 score = self._calculate_google_result_score(track, result)
-                logger.debug(f"Match score for {result.get('title', 'unknown')}: {score}")
+                logger.info(f"Match score for '{result.get('title', 'unknown')}' from {result.get('source', 'unknown')}: {score:.1f} (threshold: {self.threshold})")
                 
                 if score >= self.threshold:
                     # Convert to standard format

@@ -53,7 +53,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="DJ Set Tagger",
     description="Scan and tag DJ sets using 1001Tracklists metadata",
-    version="0.6.0-alpha",
+    version="0.6.5-alpha",
     lifespan=lifespan
 )
 
@@ -77,7 +77,7 @@ app.include_router(settings.router, prefix="/api/settings", tags=["settings"])
 @app.get("/api/health")
 async def health_check():
     """Health check endpoint"""
-    return {"status": "healthy", "version": "0.6.0-alpha"}
+    return {"status": "healthy", "version": "0.6.5-alpha"}
 
 
 @app.get("/api")
@@ -86,5 +86,5 @@ async def api_root():
     return {
         "message": "DJ Set Tagger API",
         "docs": "/docs",
-        "version": "0.6.0-alpha"
+        "version": "0.6.5-alpha"
     }

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { 
@@ -119,12 +119,12 @@ function TrackDetail() {
     queryFn: () => getTrack(id),
   })
 
-  const { data: matches } = useQuery({
+  const { data: matches, refetch: refetchMatches } = useQuery({
     queryKey: ['matches', id],
     queryFn: () => getMatchResults(id),
     enabled: !!track,
-    // Poll more frequently while searching
-    refetchInterval: isSearching ? 1000 : false,
+    // Poll every 2 seconds while searching
+    refetchInterval: isSearching ? 2000 : false,
   })
 
   const updateMutation = useMutation({
@@ -139,19 +139,39 @@ function TrackDetail() {
     mutationFn: () => matchTrack(id),
     onMutate: () => {
       setIsSearching(true)
-      // Auto-stop searching after 30 seconds as fallback
-      setTimeout(() => setIsSearching(false), 30000)
+      // Auto-stop searching after 60 seconds as fallback
+      setTimeout(() => {
+        setIsSearching(false)
+        refetchMatches()
+      }, 60000)
     },
     onSuccess: () => {
       queryClient.invalidateQueries(['track', id])
-      queryClient.invalidateQueries(['matches', id])
-      // Keep searching state for a bit to catch the results
-      setTimeout(() => setIsSearching(false), 3000)
+      // Don't stop searching yet - keep polling until results arrive
     },
     onError: () => {
       setIsSearching(false)
     },
   })
+
+  // Stop searching when we get results, but do a final refetch
+  useEffect(() => {
+    if (isSearching && matches && matches.length > 0) {
+      setIsSearching(false)
+      // Results already in state, no need to refetch
+    }
+  }, [isSearching, matches])
+  
+  // Also poll periodically after search starts to catch results
+  useEffect(() => {
+    if (!isSearching) return
+    
+    const interval = setInterval(() => {
+      refetchMatches()
+    }, 3000)
+    
+    return () => clearInterval(interval)
+  }, [isSearching, refetchMatches])
 
   const selectMatchMutation = useMutation({
     mutationFn: (matchId) => selectMatch(id, matchId),
