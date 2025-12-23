@@ -86,6 +86,7 @@ function SeriesCard({ series, seriesIndex, onApply, applyingIndex }) {
   const [albumArtistName, setAlbumArtistName] = useState(series.suggested_album_artist || '')
   const [coverUrl, setCoverUrl] = useState('')
   const [showCoverModal, setShowCoverModal] = useState(false)
+  const [showAlternatives, setShowAlternatives] = useState(false)
   
   // Track if user has manually edited the inputs
   const [userEditedAlbum, setUserEditedAlbum] = useState(false)
@@ -94,6 +95,15 @@ function SeriesCard({ series, seriesIndex, onApply, applyingIndex }) {
   const [userEditedAlbumArtist, setUserEditedAlbumArtist] = useState(false)
   
   const isApplying = applyingIndex === seriesIndex
+  
+  // Function to select an alternative match
+  const selectAlternative = (alt) => {
+    setAlbumName(alt.album)
+    setArtistName(alt.artist || '')
+    setGenreName(alt.genre || '')
+    setAlbumArtistName(alt.album_artist || '')
+    setShowAlternatives(false)
+  }
   
   // Reset selection when tracks change, but preserve user-edited values
   useEffect(() => {
@@ -154,9 +164,41 @@ function SeriesCard({ series, seriesIndex, onApply, applyingIndex }) {
               {series.is_orphan && series.matched_series && (
                 <span className="ml-2 text-xs font-normal text-yellow-400">
                   → Add to "{series.matched_series}"
+                  {series.alternative_matches?.length > 0 && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setShowAlternatives(!showAlternatives)
+                      }}
+                      className="ml-1 text-gray-400 hover:text-yellow-300 underline"
+                    >
+                      (+{series.alternative_matches.length} more)
+                    </button>
+                  )}
                 </span>
               )}
             </h3>
+            {/* Alternative matches dropdown */}
+            {showAlternatives && series.alternative_matches?.length > 0 && (
+              <div className="mt-2 p-2 bg-gray-700 rounded-lg border border-gray-600">
+                <p className="text-xs text-gray-400 mb-2">Other possible matches:</p>
+                <div className="space-y-1">
+                  {series.alternative_matches.map((alt, i) => (
+                    <button
+                      key={i}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        selectAlternative(alt)
+                      }}
+                      className="w-full text-left px-2 py-1 text-sm text-gray-300 hover:bg-gray-600 rounded flex items-center justify-between"
+                    >
+                      <span>{alt.album}</span>
+                      <span className="text-xs text-gray-500">{Math.round(alt.score * 100)}% match</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
             <p className="text-sm text-gray-400">
               {series.track_count} {series.track_count === 1 ? 'episode' : 'episodes'} found
               {series.matched_series && ` • Matches "${series.matched_series}"`}

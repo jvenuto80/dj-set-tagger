@@ -572,32 +572,49 @@ async def detect_series(
                 
                 display_name, normalized, episode = extract_series_name(track.filename)
                 
-                # Check if this track's normalized name matches any tagged series
+                # Collect ALL matching series with their scores
+                matches = []
                 for album_normalized, series_info in tagged_series_map.items():
-                    if similarity_score(normalized, album_normalized) > 0.5:
-                        # Found a match! Add as a single-track "series" with suggestion to add to existing
-                        orphan_key = f"orphan:{track.id}"
-                        series_groups[orphan_key] = [{
-                            'track_id': track.id,
-                            'filename': track.filename,
-                            'display_name': display_name,
-                            'current_album': track.album,
-                            'matched_album': track.matched_album,
-                            'current_artist': track.artist,
-                            'current_genre': track.genre,
-                            'matched_genre': track.matched_genre,
-                            'current_album_artist': track.album_artist,
-                            'matched_album_artist': track.matched_album_artist,
-                            'episode': episode,
-                            'directory': track.directory,
-                            'suggested_album': series_info['album'],
-                            'suggested_artist': series_info['artist'],
-                            'suggested_genre': series_info['genre'],
-                            'suggested_album_artist': series_info['album_artist'],
-                            'matched_series': series_info['album'],  # Mark that this matches an existing series
-                        }]
-                        existing_track_ids.add(track.id)
-                        break
+                    score = similarity_score(normalized, album_normalized)
+                    if score > 0.5:
+                        matches.append({
+                            'album': series_info['album'],
+                            'artist': series_info['artist'],
+                            'genre': series_info['genre'],
+                            'album_artist': series_info['album_artist'],
+                            'cover_url': series_info['cover_url'],
+                            'score': score
+                        })
+                
+                # If we found matches, use the best one as primary but include alternatives
+                if matches:
+                    # Sort by score descending
+                    matches.sort(key=lambda x: -x['score'])
+                    best_match = matches[0]
+                    alternative_matches = matches[1:5]  # Keep up to 4 alternatives
+                    
+                    orphan_key = f"orphan:{track.id}"
+                    series_groups[orphan_key] = [{
+                        'track_id': track.id,
+                        'filename': track.filename,
+                        'display_name': display_name,
+                        'current_album': track.album,
+                        'matched_album': track.matched_album,
+                        'current_artist': track.artist,
+                        'current_genre': track.genre,
+                        'matched_genre': track.matched_genre,
+                        'current_album_artist': track.album_artist,
+                        'matched_album_artist': track.matched_album_artist,
+                        'episode': episode,
+                        'directory': track.directory,
+                        'suggested_album': best_match['album'],
+                        'suggested_artist': best_match['artist'],
+                        'suggested_genre': best_match['genre'],
+                        'suggested_album_artist': best_match['album_artist'],
+                        'matched_series': best_match['album'],  # Mark that this matches an existing series
+                        'alternative_matches': alternative_matches,  # Include other potential matches
+                    }]
+                    existing_track_ids.add(track.id)
         
         # Build final series list
         series_list = []
@@ -676,6 +693,9 @@ async def detect_series(
                     if is_orphan:
                         series_entry['is_orphan'] = True
                         series_entry['matched_series'] = track_list[0].get('matched_series')
+                        # Include alternative matches if available
+                        if track_list[0].get('alternative_matches'):
+                            series_entry['alternative_matches'] = track_list[0].get('alternative_matches')
                     series_list.append(series_entry)
         
         return sorted(series_list, key=lambda x: (-1 if x.get('is_orphan') else 0, -x['track_count']))
