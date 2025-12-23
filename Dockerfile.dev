@@ -59,5 +59,4 @@ ENV CONFIG_DIR=/config
 EXPOSE 5000 8080
 
 # Development mode - run both services
-CMD python -m uvicorn backend.main:app --host 0.0.0.0 --port 5000 --reload &\
-    cd /app/frontend && npm run preview -- --host 0.0.0.0 --port 8080
+CMD bash -c "python -m uvicorn backend.main:app --host 0.0.0.0 --port 5000 --reload & cd /app/frontend && npx vite preview --host 0.0.0.0 --port 8080"
