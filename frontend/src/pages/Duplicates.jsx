@@ -27,6 +27,7 @@ function Duplicates() {
   const [expandedGroups, setExpandedGroups] = useState(new Set())
   const [workers, setWorkers] = useState(8)
   const [regenerateAll, setRegenerateAll] = useState(false)
+  const [isRefreshing, setIsRefreshing] = useState(false)
 
   const { data: fpStatus, isLoading: statusLoading, refetch: refetchStatus } = useQuery({
     queryKey: ['fingerprintStatus'],
@@ -238,11 +239,16 @@ function Duplicates() {
           Duplicate Detection
         </h1>
         <button
-          onClick={() => refetch()}
-          className="flex items-center gap-2 px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg transition-colors"
+          onClick={async () => {
+            setIsRefreshing(true)
+            await Promise.all([refetchStatus(), refetch()])
+            setIsRefreshing(false)
+          }}
+          disabled={isRefreshing}
+          className="flex items-center gap-2 px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg transition-colors disabled:opacity-50"
         >
-          <RefreshCw className="w-4 h-4" />
-          Refresh
+          <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
+          {isRefreshing ? 'Refreshing...' : 'Refresh'}
         </button>
       </div>
 
