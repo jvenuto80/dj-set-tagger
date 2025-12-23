@@ -317,14 +317,25 @@ async def delete_track_file(track_id: int):
         filepath = track.filepath
         filename = track.filename
         
-        # Security check: Ensure file is within allowed music directory
-        music_dir = os.path.realpath(settings.MUSIC_DIR)
+        # Security check: Ensure file is within allowed music directories
+        # Load configured scan directories from settings
+        from backend.api.settings import load_saved_settings
+        saved_settings = load_saved_settings()
+        allowed_dirs = saved_settings.get("music_dirs", [settings.MUSIC_DIR])
+        if not allowed_dirs:
+            allowed_dirs = [settings.MUSIC_DIR]
+        
         real_filepath = os.path.realpath(filepath)
-        if not real_filepath.startswith(music_dir):
-            logger.warning(f"Attempted to delete file outside music directory: {filepath}")
+        is_allowed = any(
+            real_filepath.startswith(os.path.realpath(allowed_dir))
+            for allowed_dir in allowed_dirs
+        )
+        
+        if not is_allowed:
+            logger.warning(f"Attempted to delete file outside allowed directories: {filepath}")
             raise HTTPException(
                 status_code=403, 
-                detail="Cannot delete files outside the configured music directory"
+                detail="Cannot delete files outside the configured music directories"
             )
         
         # Check if file exists
