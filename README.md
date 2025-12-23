@@ -36,6 +36,11 @@ Configure scan settings, matching thresholds, and manage your database.
 
 ![Settings](docs/settings.png)
 
+### Duplicates
+Detect and manage duplicate audio files using audio fingerprinting.
+
+![Duplicates](docs/duplicates.png)
+
 ## Features
 
 - 🎵 **Automatic Scanning**: Scans directories for audio files (MP3, FLAC, WAV, M4A, AAC, OGG)
