@@ -81,6 +81,9 @@ class AudioTagger:
         
         ext = os.path.splitext(filepath)[1].lower()
         
+        # Marker to indicate this track was series-tagged
+        series_marker = "DJ Set Tagger Series"
+        
         try:
             if ext == '.mp3':
                 try:
@@ -98,6 +101,9 @@ class AudioTagger:
                 if album_artist:
                     from mutagen.id3 import TPE2
                     audio['TPE2'] = TPE2(encoding=3, text=album_artist)
+                # Add series marker to grouping tag (TIT1)
+                from mutagen.id3 import TIT1
+                audio['TIT1'] = TIT1(encoding=3, text=series_marker)
                 
                 audio.save(filepath)
                 logger.info(f"Updated album/artist/genre/album_artist tags for: {filepath}")
@@ -113,6 +119,8 @@ class AudioTagger:
                     audio['GENRE'] = genre
                 if album_artist:
                     audio['ALBUMARTIST'] = album_artist
+                # Add series marker to grouping tag
+                audio['GROUPING'] = series_marker
                 audio.save()
                 logger.info(f"Updated album/artist/genre/album_artist tags for: {filepath}")
                 return True
@@ -127,6 +135,8 @@ class AudioTagger:
                     audio['\xa9gen'] = [genre]
                 if album_artist:
                     audio['aART'] = [album_artist]
+                # Add series marker to grouping tag
+                audio['\xa9grp'] = [series_marker]
                 audio.save()
                 logger.info(f"Updated album/artist/genre/album_artist tags for: {filepath}")
                 return True
@@ -141,6 +151,8 @@ class AudioTagger:
                     audio['GENRE'] = [genre]
                 if album_artist:
                     audio['ALBUMARTIST'] = [album_artist]
+                # Add series marker to grouping tag
+                audio['GROUPING'] = [series_marker]
                 audio.save()
                 logger.info(f"Updated album/artist/genre/album_artist tags for: {filepath}")
                 return True

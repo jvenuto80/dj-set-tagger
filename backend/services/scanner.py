@@ -88,7 +88,8 @@ def extract_metadata_from_file(filepath: str) -> dict:
         "duration": None,
         "bitrate": None,
         "sample_rate": None,
-        "file_format": None
+        "file_format": None,
+        "series_tagged": False  # Whether this track was previously series-tagged
     }
     
     try:
@@ -119,6 +120,42 @@ def extract_metadata_from_file(filepath: str) -> dict:
             metadata["album"] = audio.get("album", [None])[0]
             metadata["genre"] = audio.get("genre", [None])[0]
             metadata["year"] = audio.get("date", [None])[0] or audio.get("year", [None])[0]
+        
+        # Check for series marker in grouping tag (need raw access for this)
+        series_marker = "DJ Set Tagger Series"
+        ext = Path(filepath).suffix.lower()
+        
+        try:
+            if ext == '.mp3':
+                from mutagen.id3 import ID3
+                try:
+                    raw_audio = ID3(filepath)
+                    if 'TIT1' in raw_audio:
+                        grouping = str(raw_audio['TIT1'])
+                        if series_marker in grouping:
+                            metadata["series_tagged"] = True
+                except:
+                    pass
+            elif ext == '.flac':
+                from mutagen.flac import FLAC
+                raw_audio = FLAC(filepath)
+                grouping = raw_audio.get('GROUPING', [''])[0]
+                if series_marker in grouping:
+                    metadata["series_tagged"] = True
+            elif ext in ['.m4a', '.aac', '.mp4']:
+                from mutagen.mp4 import MP4
+                raw_audio = MP4(filepath)
+                grouping_list = raw_audio.get('\xa9grp', [])
+                if grouping_list and series_marker in grouping_list[0]:
+                    metadata["series_tagged"] = True
+            elif ext == '.ogg':
+                from mutagen.oggvorbis import OggVorbis
+                raw_audio = OggVorbis(filepath)
+                grouping = raw_audio.get('GROUPING', [''])[0]
+                if series_marker in grouping:
+                    metadata["series_tagged"] = True
+        except Exception as e:
+            logger.debug(f"Could not check series marker for {filepath}: {e}")
             
     except Exception as e:
         logger.warning(f"Error extracting metadata from {filepath}: {e}")
@@ -283,7 +320,8 @@ async def scan_directory(directory: str = None):
                     file_format=metadata["file_format"],
                     bitrate=metadata["bitrate"],
                     sample_rate=metadata["sample_rate"],
-                    status="pending"
+                    status="pending",
+                    series_tagged=metadata.get("series_tagged", False)  # Restore from file metadata
                 )
                 
                 db.add(track)
