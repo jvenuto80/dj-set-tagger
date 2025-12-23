@@ -183,6 +183,11 @@ export const backfillSeriesMarkers = async () => {
   return data
 }
 
+export const removeFromSeries = async (trackIds) => {
+  const { data } = await api.post('/tracks/series/remove-from-series', trackIds)
+  return data
+}
+
 // Logs
 export const getLogs = async (lines = 200, level = null) => {
   const params = { lines }

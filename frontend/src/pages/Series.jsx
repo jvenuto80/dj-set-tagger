@@ -14,9 +14,10 @@ import {
   AlertTriangle,
   XCircle,
   Image,
-  RefreshCw
+  RefreshCw,
+  Trash2
 } from 'lucide-react'
-import { detectSeries, getTaggedSeries, applySeriesAlbum } from '../api'
+import { detectSeries, getTaggedSeries, applySeriesAlbum, removeFromSeries } from '../api'
 import ProgressButton from '../components/ProgressButton'
 import CoverArtModal from '../components/CoverArtModal'
 import { useJob } from '../contexts/JobContext'
@@ -351,7 +352,7 @@ function SeriesCard({ series, seriesIndex, onApply, applyingIndex }) {
   )
 }
 
-function TaggedSeriesCard({ series, onApply, applyingIndex, seriesIndex }) {
+function TaggedSeriesCard({ series, onApply, onRemove, applyingIndex, removingIndex, seriesIndex }) {
   const [isExpanded, setIsExpanded] = useState(false)
   const [isEditing, setIsEditing] = useState(false)
   const [selectedTracks, setSelectedTracks] = useState(
@@ -365,6 +366,7 @@ function TaggedSeriesCard({ series, onApply, applyingIndex, seriesIndex }) {
   const [showCoverModal, setShowCoverModal] = useState(false)
   
   const isApplying = applyingIndex === seriesIndex
+  const isRemoving = removingIndex === seriesIndex
 
   const toggleTrack = (trackId) => {
     setSelectedTracks(prev => 
@@ -586,22 +588,39 @@ function TaggedSeriesCard({ series, onApply, applyingIndex, seriesIndex }) {
             ))}
           </div>
 
-          {/* Apply button (only when editing) */}
+          {/* Apply and Remove buttons (only when editing) */}
           {isEditing && (
-            <ProgressButton
-              onClick={(e) => {
-                e.stopPropagation()
-                onApply(seriesIndex, selectedTracks, albumName, artistName, genreName, albumArtistName, coverUrl)
-              }}
-              disabled={selectedTracks.length === 0}
-              isLoading={isApplying}
-              loadingText={`Re-tagging ${selectedTracks.length} tracks...`}
-              icon={<Check className="w-4 h-4" />}
-              variant="primary"
-              className="w-full"
-            >
-              Re-tag {selectedTracks.length} Tracks{coverUrl ? ' + Cover' : ''}
-            </ProgressButton>
+            <div className="flex gap-2">
+              <ProgressButton
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onApply(seriesIndex, selectedTracks, albumName, artistName, genreName, albumArtistName, coverUrl)
+                }}
+                disabled={selectedTracks.length === 0}
+                isLoading={isApplying}
+                loadingText={`Re-tagging ${selectedTracks.length} tracks...`}
+                icon={<Check className="w-4 h-4" />}
+                variant="primary"
+                className="flex-1"
+              >
+                Re-tag {selectedTracks.length} Tracks{coverUrl ? ' + Cover' : ''}
+              </ProgressButton>
+              <ProgressButton
+                onClick={(e) => {
+                  e.stopPropagation()
+                  if (window.confirm(`Remove ${selectedTracks.length} track(s) from this series? This will clear their album tag.`)) {
+                    onRemove(seriesIndex, selectedTracks)
+                  }
+                }}
+                disabled={selectedTracks.length === 0}
+                isLoading={isRemoving}
+                loadingText="Removing..."
+                icon={<Trash2 className="w-4 h-4" />}
+                variant="danger"
+              >
+                Remove
+              </ProgressButton>
+            </div>
           )}
         </div>
       )}
@@ -624,6 +643,7 @@ function Series() {
   const [includeTagged, setIncludeTagged] = useState(false)
   const [isReEvaluating, setIsReEvaluating] = useState(false)
   const [applyingTaggedIndex, setApplyingTaggedIndex] = useState(null)
+  const [removingIndex, setRemovingIndex] = useState(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [activeTab, setActiveTab] = useState('untagged') // 'untagged' or 'tagged'
   const [localToast, setLocalToast] = useState(null)
@@ -700,6 +720,42 @@ function Series() {
   const handleApplyTagged = (index, trackIds, album, artist, genre, albumArtist, coverUrl) => {
     setApplyingTaggedIndex(index)
     applyMutation.mutate({ trackIds, album, artist, genre, albumArtist, coverUrl })
+  }
+
+  const removeMutation = useMutation({
+    mutationFn: (trackIds) => removeFromSeries(trackIds),
+    onSuccess: (data) => {
+      setRemovingIndex(null)
+      queryClient.invalidateQueries(['series'])
+      queryClient.invalidateQueries(['taggedSeries'])
+      queryClient.invalidateQueries(['tracks'])
+      
+      if (data.errors && data.errors.length > 0) {
+        setLocalToast({
+          type: 'error',
+          message: `${data.updated} tracks removed. ${data.errors.length} errors:`,
+          errors: data.errors
+        })
+      } else {
+        setLocalToast({
+          type: 'success',
+          message: data.message || `Successfully removed ${data.updated} tracks from series`
+        })
+      }
+    },
+    onError: (error) => {
+      setRemovingIndex(null)
+      setLocalToast({
+        type: 'error',
+        message: 'Failed to remove tracks from series',
+        errors: [{ filename: 'API Error', error: error.message || 'Unknown error' }]
+      })
+    },
+  })
+
+  const handleRemoveFromSeries = (index, trackIds) => {
+    setRemovingIndex(index)
+    removeMutation.mutate(trackIds)
   }
 
   // Filter series based on search query
@@ -985,7 +1041,9 @@ function Series() {
                   series={s}
                   seriesIndex={index}
                   onApply={handleApplyTagged}
+                  onRemove={handleRemoveFromSeries}
                   applyingIndex={applyingTaggedIndex}
+                  removingIndex={removingIndex}
                 />
               ))}
             </div>

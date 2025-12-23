@@ -1224,3 +1224,95 @@ async def backfill_series_markers():
         "skipped": skipped,
         "errors": errors
     }
+
+
+@router.post("/series/remove-from-series")
+async def remove_from_series(track_ids: List[int]):
+    """
+    Remove tracks from their series by clearing album tag and series_tagged flag.
+    Also removes the series marker from the file metadata.
+    """
+    from backend.services.tagger import AudioTagger
+    from mutagen import File as MutagenFile
+    from mutagen.id3 import ID3
+    from mutagen.flac import FLAC
+    from mutagen.mp4 import MP4
+    from mutagen.oggvorbis import OggVorbis
+    
+    updated = 0
+    errors = []
+    
+    async with get_db() as db:
+        result = await db.execute(
+            select(Track).where(Track.id.in_(track_ids))
+        )
+        tracks = result.scalars().all()
+        
+        logger.info(f"Removing {len(tracks)} tracks from series")
+        
+        for track in tracks:
+            try:
+                if not os.path.exists(track.filepath):
+                    errors.append({'filename': track.filename, 'error': 'File not found'})
+                    continue
+                
+                ext = os.path.splitext(track.filepath)[1].lower()
+                
+                # Clear album and series marker from file
+                try:
+                    if ext == '.mp3':
+                        audio = ID3(track.filepath)
+                        # Remove album tag
+                        if 'TALB' in audio:
+                            del audio['TALB']
+                        # Remove series marker
+                        if 'TIT1' in audio:
+                            del audio['TIT1']
+                        audio.save(track.filepath)
+                        
+                    elif ext == '.flac':
+                        audio = FLAC(track.filepath)
+                        if 'ALBUM' in audio:
+                            del audio['ALBUM']
+                        if 'GROUPING' in audio:
+                            del audio['GROUPING']
+                        audio.save()
+                        
+                    elif ext in ['.m4a', '.aac', '.mp4']:
+                        audio = MP4(track.filepath)
+                        if '\xa9alb' in audio:
+                            del audio['\xa9alb']
+                        if '\xa9grp' in audio:
+                            del audio['\xa9grp']
+                        audio.save()
+                        
+                    elif ext == '.ogg':
+                        audio = OggVorbis(track.filepath)
+                        if 'ALBUM' in audio:
+                            del audio['ALBUM']
+                        if 'GROUPING' in audio:
+                            del audio['GROUPING']
+                        audio.save()
+                        
+                except Exception as e:
+                    logger.warning(f"Could not clear file tags for {track.filepath}: {e}")
+                
+                # Clear database fields
+                track.album = None
+                track.matched_album = None
+                track.series_tagged = False
+                updated += 1
+                
+                logger.info(f"Removed from series: {track.filename}")
+                
+            except Exception as e:
+                errors.append({'filename': track.filename, 'error': str(e)})
+                logger.error(f"Error removing {track.filepath} from series: {e}")
+        
+        await db.commit()
+    
+    return {
+        "message": f"Removed {updated} tracks from series",
+        "updated": updated,
+        "errors": errors
+    }
