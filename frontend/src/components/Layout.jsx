@@ -26,7 +26,7 @@ function Layout({ children }) {
         <div className="p-4 border-b border-gray-700">
           <Link to="/" className="flex items-center gap-3">
             <Disc3 className="w-8 h-8 text-primary-500" />
-            <span className="text-xl font-bold">DJ Set Tagger</span>
+            <span className="text-xl font-bold">SetList</span>
           </Link>
         </div>
         
@@ -57,7 +57,7 @@ function Layout({ children }) {
         
         <div className="p-4 border-t border-gray-700">
           <div className="text-xs text-gray-500 text-center">
-            DJ Set Tagger v0.6.5 alpha
+            SetList v0.7.0 alpha
           </div>
         </div>
       </aside>

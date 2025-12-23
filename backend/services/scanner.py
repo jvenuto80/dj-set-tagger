@@ -122,7 +122,7 @@ def extract_metadata_from_file(filepath: str) -> dict:
             metadata["year"] = audio.get("date", [None])[0] or audio.get("year", [None])[0]
         
         # Check for series marker in grouping tag (need raw access for this)
-        series_marker = "DJ Set Tagger Series"
+        series_marker = "SetList Series"
         ext = Path(filepath).suffix.lower()
         
         try:

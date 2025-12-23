@@ -1,5 +1,5 @@
 """
-DJ Set Tagger - FastAPI Backend
+SetList - FastAPI Backend
 Main application entry point
 """
 from fastapi import FastAPI
@@ -33,7 +33,7 @@ logger.add(
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler"""
-    logger.info("Starting DJ Set Tagger...")
+    logger.info("Starting SetList...")
     
     # Initialize database
     await init_db()
@@ -47,13 +47,13 @@ async def lifespan(app: FastAPI):
     
     yield
     
-    logger.info("Shutting down DJ Set Tagger...")
+    logger.info("Shutting down SetList...")
 
 
 app = FastAPI(
-    title="DJ Set Tagger",
-    description="Scan and tag DJ sets using 1001Tracklists metadata",
-    version="0.6.5-alpha",
+    title="SetList",
+    description="Organize and tag your music library - DJ sets, podcasts, radio shows, and albums",
+    version="0.7.0-alpha",
     lifespan=lifespan
 )
 
@@ -77,14 +77,14 @@ app.include_router(settings.router, prefix="/api/settings", tags=["settings"])
 @app.get("/api/health")
 async def health_check():
     """Health check endpoint"""
-    return {"status": "healthy", "version": "0.6.5-alpha"}
+    return {"status": "healthy", "version": "0.7.0-alpha"}
 
 
 @app.get("/api")
 async def api_root():
     """API root endpoint"""
     return {
-        "message": "DJ Set Tagger API",
+        "message": "SetList API",
         "docs": "/docs",
-        "version": "0.6.5-alpha"
+        "version": "0.7.0-alpha"
     }

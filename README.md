@@ -1,6 +1,6 @@
-# DJ Set Tagger
+# SetList
 
-A Docker application for scanning and tagging DJ sets and electronic music tracks using metadata from 1001Tracklists.com. Perfect for organizing long DJ sets, podcasts, and radio show recordings.
+A Docker application for organizing and tagging your music library - DJ sets, podcasts, radio shows, and CD albums. Uses metadata from 1001Tracklists.com and MusicBrainz to automatically identify and tag your tracks.
 
 ## Screenshots
 
@@ -13,12 +13,15 @@ Overview of your library with quick stats and recent tracks.
 
 - 🎵 **Automatic Scanning**: Scans directories for audio files (MP3, FLAC, WAV, M4A, AAC, OGG)
 - 🔍 **Fuzzy Matching**: Uses intelligent fuzzy string matching to find potential track matches on 1001Tracklists
+- 💿 **MusicBrainz Integration**: Search and identify CD albums using the MusicBrainz database
 - 📝 **Metadata Tagging**: Automatically tags tracks with artist, title, genre, and more
 - 🖼️ **Cover Art Download**: Downloads and embeds cover art from matched tracklists
+- 🎧 **Audio Player with Waveform**: Preview tracks with real-time waveform visualization
 - 👁️ **Web Interface**: Modern dark-themed UI to review matches and make corrections
 - 📦 **Batch Operations**: Process multiple tracks at once or one at a time
 - ✏️ **Manual Editing**: Edit metadata manually when automatic matching isn't accurate
 - 📁 **Smart Renaming**: Batch rename files using customizable patterns
+- 📻 **Series Detection**: Automatically groups radio shows and podcast episodes
 - 🤖 **AI-Ready**: Architecture prepared for future AI-based matching (audio fingerprinting, etc.)
 
 ## Installation on Unraid
@@ -29,13 +32,13 @@ Overview of your library with quick stats and recent tracks.
 
 2. Create the app directory:
    ```bash
-   mkdir -p /mnt/user/appdata/dj-set-tagger
-   cd /mnt/user/appdata/dj-set-tagger
+   mkdir -p /mnt/user/appdata/setlist
+   cd /mnt/user/appdata/setlist
    ```
 
 3. Download the project (or git clone):
    ```bash
-   git clone https://github.com/yourusername/dj-set-tagger.git .
+   git clone https://github.com/yourusername/setlist.git .
    ```
 
 4. Edit `docker-compose.yml` to set your music path:
@@ -57,8 +60,8 @@ Overview of your library with quick stats and recent tracks.
 1. In Unraid, go to **Docker** tab
 2. Click **Add Container**
 3. Use these settings:
-   - **Name**: `dj-set-tagger`
-   - **Repository**: Build locally or use `ghcr.io/yourusername/dj-set-tagger:latest`
+   - **Name**: `setlist`
+   - **Repository**: Build locally or use `ghcr.io/yourusername/setlist:latest`
    - **Network Type**: `Bridge`
    
 4. Add port mappings:
@@ -67,7 +70,7 @@ Overview of your library with quick stats and recent tracks.
 
 5. Add path mappings:
    - `/music` -> Your DJ sets folder (e.g., `/mnt/user/media/music/dj-sets`)
-   - `/config` -> `/mnt/user/appdata/dj-set-tagger`
+   - `/config` -> `/mnt/user/appdata/setlist`
 
 6. Click **Apply**
 
@@ -75,19 +78,19 @@ Overview of your library with quick stats and recent tracks.
 
 ```bash
 # Build the image
-cd /mnt/user/appdata/dj-set-tagger
-docker build -t dj-set-tagger .
+cd /mnt/user/appdata/setlist
+docker build -t setlist .
 
 # Run the container
 docker run -d \
-  --name dj-set-tagger \
+  --name setlist \
   --restart unless-stopped \
   -p 8080:8080 \
   -p 5000:5000 \
   -v /mnt/user/media/music/dj-sets:/music \
-  -v /mnt/user/appdata/dj-set-tagger/config:/config \
+  -v /mnt/user/appdata/setlist/config:/config \
   -e TZ=America/New_York \
-  dj-set-tagger
+  setlist
 ```
 
 ## Usage Guide
@@ -139,7 +142,7 @@ docker run -d \
 ## Architecture
 
 ```
-dj-set-tagger/
+setlist/
 ├── backend/                 # FastAPI Python backend
 │   ├── api/                 # REST API routes
 │   │   ├── tracks.py        # Track CRUD operations
@@ -151,6 +154,7 @@ dj-set-tagger/
 │   │   ├── scanner.py       # File scanning service
 │   │   ├── matcher.py       # Fuzzy matching engine
 │   │   ├── tagger.py        # Audio file tagging
+│   │   ├── musicbrainz.py   # MusicBrainz API integration
 │   │   ├── tracklists_api.py # 1001Tracklists scraper
 │   │   └── database.py      # SQLite database
 │   ├── models/              # SQLAlchemy & Pydantic models
@@ -165,7 +169,7 @@ dj-set-tagger/
 ├── docker/                  # Docker configuration
 │   └── start.sh             # Container startup script
 ├── unraid/                  # Unraid-specific files
-│   └── dj-set-tagger.xml    # Unraid template
+│   └── setlist.xml          # Unraid template
 ├── Dockerfile               # Production Docker build
 ├── docker-compose.yml       # Docker Compose config
 └── README.md

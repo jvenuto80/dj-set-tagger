@@ -4,7 +4,7 @@ import { getTaggingJobStatus } from '../api'
 
 const JobContext = createContext(null)
 
-const STORAGE_KEY = 'djSetTagger_activeJob'
+const STORAGE_KEY = 'setlist_activeJob'
 
 export function JobProvider({ children }) {
   const queryClient = useQueryClient()

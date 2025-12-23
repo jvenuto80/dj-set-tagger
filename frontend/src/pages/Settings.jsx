@@ -205,7 +205,7 @@ function Settings() {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `dj-set-tagger-logs-${new Date().toISOString().split('T')[0]}.log`
+    a.download = `setlist-logs-${new Date().toISOString().split('T')[0]}.log`
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)

@@ -8,7 +8,7 @@ from typing import Optional, List, Dict
 
 # MusicBrainz API endpoint
 MUSICBRAINZ_API = "https://musicbrainz.org/ws/2"
-USER_AGENT = "DJSetTagger/1.0 (https://github.com/jvenuto80/dj-set-tagger)"
+USER_AGENT = "SetList/1.0 (https://github.com/jvenuto80/setlist)"
 
 
 async def search_album(query: str, artist: str = None, limit: int = 10) -> List[Dict]:

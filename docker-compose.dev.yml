@@ -1,11 +1,11 @@
 version: '3.8'
 
 services:
-  dj-set-tagger:
+  setlist:
     build:
       context: .
       dockerfile: Dockerfile.dev
-    container_name: dj-set-tagger-dev
+    container_name: setlist-dev
     ports:
       - "8080:8080"    # Web UI
       - "5001:5000"    # API (mapped to 5001 on host)

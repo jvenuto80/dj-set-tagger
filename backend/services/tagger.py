@@ -82,7 +82,7 @@ class AudioTagger:
         ext = os.path.splitext(filepath)[1].lower()
         
         # Marker to indicate this track was series-tagged
-        series_marker = "DJ Set Tagger Series"
+        series_marker = "SetList Series"
         
         try:
             if ext == '.mp3':
