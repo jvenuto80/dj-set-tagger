@@ -150,9 +150,9 @@ function SeriesCard({ series, seriesIndex, onApply, applyingIndex }) {
           <div>
             <h3 className="font-semibold text-lg">
               {series.series_name}
-              {series.is_orphan && (
+              {series.is_orphan && series.matched_series && (
                 <span className="ml-2 text-xs font-normal text-yellow-400">
-                  → Add to existing series
+                  → Add to "{series.matched_series}"
                 </span>
               )}
             </h3>
