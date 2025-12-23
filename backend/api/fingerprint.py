@@ -23,7 +23,8 @@ from backend.api.settings import load_saved_settings
 
 router = APIRouter(prefix="/fingerprint", tags=["fingerprint"])
 
-# Global state for fingerprint generation
+# Global state for fingerprint generation with lock for thread safety
+fingerprint_state_lock = asyncio.Lock()
 fingerprint_state = {
     "is_running": False,
     "should_cancel": False,
@@ -203,7 +204,7 @@ async def generate_fingerprints_endpoint(
     
     Args:
         overwrite: Regenerate fingerprints even if they exist
-        workers: Number of parallel workers (default 4, max 8)
+        workers: Number of parallel workers (default 8, max 16)
     """
     global fingerprint_state
     
@@ -222,7 +223,7 @@ async def generate_fingerprints_endpoint(
         )
     
     # Limit workers to reasonable range
-    workers = max(1, min(workers, 8))
+    workers = max(1, min(workers, 16))
     
     async with get_db() as db:
         if overwrite:

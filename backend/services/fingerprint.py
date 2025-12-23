@@ -6,7 +6,6 @@ Uses Chromaprint for fingerprint generation and AcoustID for identification.
 import asyncio
 import hashlib
 import subprocess
-from pathlib import Path
 from typing import Optional
 from loguru import logger
 

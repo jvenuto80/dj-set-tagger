@@ -35,7 +35,7 @@ function Duplicates() {
     refetchInterval: (query) => query.state.data?.is_generating ? 1000 : 5000,
   })
 
-  const { data: duplicates, isLoading: dupsLoading, refetch } = useQuery({
+  const { data: duplicates, refetch } = useQuery({
     queryKey: ['duplicates'],
     queryFn: getDuplicates,
     enabled: fpStatus?.fingerprinted_tracks > 0,

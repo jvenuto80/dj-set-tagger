@@ -52,7 +52,7 @@ async def run_migrations(conn):
             ))
             logger.info("Added fingerprint_hash column to tracks table")
     except Exception as e:
-        logger.warning(f"Migration check failed (may be normal): {e}")
+        logger.warning(f"Migration check failed (may be normal) [{type(e).__name__}]: {e}")
 
 
 @asynccontextmanager

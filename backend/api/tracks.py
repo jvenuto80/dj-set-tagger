@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException, Query, BackgroundTasks
 from typing import List, Optional
 from backend.services.database import get_db
 from backend.models.track import Track, TrackResponse, TrackUpdate
+from backend.config import settings
 from sqlalchemy import select, or_
 from sqlalchemy.orm import Session
 from loguru import logger
@@ -315,6 +316,16 @@ async def delete_track_file(track_id: int):
         
         filepath = track.filepath
         filename = track.filename
+        
+        # Security check: Ensure file is within allowed music directory
+        music_dir = os.path.realpath(settings.MUSIC_DIR)
+        real_filepath = os.path.realpath(filepath)
+        if not real_filepath.startswith(music_dir):
+            logger.warning(f"Attempted to delete file outside music directory: {filepath}")
+            raise HTTPException(
+                status_code=403, 
+                detail="Cannot delete files outside the configured music directory"
+            )
         
         # Check if file exists
         if not os.path.exists(filepath):
