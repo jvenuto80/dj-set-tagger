@@ -239,12 +239,14 @@ setlist/
 
 ## Changelog
 
-### v0.8.0-alpha
+### v1.0.0-beta
 - 🔊 **Audio Fingerprinting**: Identify unknown tracks using AcoustID/Chromaprint
 - 🔎 **Duplicate Detection**: Find duplicate files in your library based on audio fingerprint
+- 📋 **Duplicates Page**: Dedicated page with audio waveforms to compare and safely delete duplicates
+- 🗑️ **Safe File Deletion**: Delete duplicate files with confirmation modal
 - 🆔 **Identify Audio Button**: One-click track identification on the track detail page
-- ⚙️ **AcoustID Integration**: Free API for music identification (just add your API key)
-- 📊 **Fingerprint Status**: See how many tracks have been fingerprinted in Settings
+- ⚙️ **AcoustID Integration**: Free API for music identification (just add your Developer API key)
+- 📊 **Fingerprint Status**: See how many tracks have been fingerprinted
 - 🗃️ **Database Migration**: Automatic schema updates for new features
 
 ### v0.7.0-alpha
