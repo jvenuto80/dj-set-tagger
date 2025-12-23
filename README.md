@@ -206,13 +206,30 @@ dj-set-tagger/
 - Verify the path mapping in Docker
 - Check that the file extensions are in the scan list
 
+## Changelog
+
+### v0.7.0-alpha
+- ✨ **Audio Player with Waveform**: Play tracks directly in the browser with real-time waveform visualization
+- 🎵 **MusicBrainz Integration**: Search and identify CD albums using MusicBrainz/CDDB database
+- 📀 **Album-Based Grouping**: Automatically groups tracks by existing album metadata (great for CD rips)
+- 🔄 **Single Track Playback**: Only one track plays at a time across the entire app
+- 🎨 **Visual Indicators**: Album groups show distinct green styling, orphan tracks show yellow
+- ➕ **Alternative Series Matches**: View and select from multiple potential series matches with confidence scores
+- ❌ **Remove from Series**: Easily remove tracks that were incorrectly added to a series
+- 🔧 **Toast Notifications Fix**: Close button on notifications now works correctly
+
+### v0.6.5-alpha
+- Series marker persistence improvements
+- Orphan track detection and re-evaluation
+- Cover art search enhancements
+
 ## Future Enhancements
 
 - [ ] Audio fingerprinting (AcoustID/Shazam-style matching)
 - [ ] AI-powered metadata extraction
 - [ ] Spotify/Beatport integration
 - [ ] Cue file generation
-- [ ] Waveform visualization
+- [x] ~~Waveform visualization~~ ✅ Added in v0.7.0
 - [ ] Mobile-responsive UI improvements
 
 ## Credits

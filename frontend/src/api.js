@@ -188,6 +188,24 @@ export const removeFromSeries = async (trackIds) => {
   return data
 }
 
+// MusicBrainz search
+export const searchMusicBrainz = async (query, artist = null) => {
+  const params = { query }
+  if (artist) params.artist = artist
+  const { data } = await api.get('/tracks/musicbrainz/search', { params })
+  return data
+}
+
+export const getMusicBrainzRelease = async (releaseId) => {
+  const { data } = await api.get(`/tracks/musicbrainz/release/${releaseId}`)
+  return data
+}
+
+export const searchMusicBrainzByTracks = async (trackNames) => {
+  const { data } = await api.post('/tracks/musicbrainz/search-by-tracks', trackNames)
+  return data
+}
+
 // Logs
 export const getLogs = async (lines = 200, level = null) => {
   const params = { lines }

@@ -15,11 +15,16 @@ import {
   XCircle,
   Image,
   RefreshCw,
-  Trash2
+  Trash2,
+  Disc,
+  ExternalLink,
+  Play,
+  Pause
 } from 'lucide-react'
-import { detectSeries, getTaggedSeries, applySeriesAlbum, removeFromSeries } from '../api'
+import { detectSeries, getTaggedSeries, applySeriesAlbum, removeFromSeries, searchMusicBrainz, getMusicBrainzRelease } from '../api'
 import ProgressButton from '../components/ProgressButton'
 import CoverArtModal from '../components/CoverArtModal'
+import AudioPlayer from '../components/AudioPlayer'
 import { useJob } from '../contexts/JobContext'
 
 // Toast notification component for errors
@@ -75,6 +80,211 @@ function SuccessToast({ message, onClose }) {
   )
 }
 
+// MusicBrainz Search Modal
+function MusicBrainzModal({ isOpen, onClose, onSelect, defaultQuery, defaultArtist }) {
+  const [query, setQuery] = useState(defaultQuery || '')
+  const [artist, setArtist] = useState(defaultArtist || '')
+  const [results, setResults] = useState([])
+  const [isSearching, setIsSearching] = useState(false)
+  const [selectedRelease, setSelectedRelease] = useState(null)
+  const [releaseDetails, setReleaseDetails] = useState(null)
+  const [isLoadingDetails, setIsLoadingDetails] = useState(false)
+  
+  useEffect(() => {
+    if (isOpen) {
+      setQuery(defaultQuery || '')
+      setArtist(defaultArtist || '')
+      setResults([])
+      setSelectedRelease(null)
+      setReleaseDetails(null)
+    }
+  }, [isOpen, defaultQuery, defaultArtist])
+  
+  const handleSearch = async () => {
+    if (!query.trim()) return
+    
+    setIsSearching(true)
+    try {
+      const data = await searchMusicBrainz(query, artist || null)
+      setResults(data.results || [])
+    } catch (error) {
+      console.error('MusicBrainz search error:', error)
+    }
+    setIsSearching(false)
+  }
+  
+  const handleSelectRelease = async (release) => {
+    setSelectedRelease(release)
+    setIsLoadingDetails(true)
+    try {
+      const data = await getMusicBrainzRelease(release.id)
+      setReleaseDetails(data)
+    } catch (error) {
+      console.error('Error loading release details:', error)
+    }
+    setIsLoadingDetails(false)
+  }
+  
+  const handleConfirmSelection = () => {
+    if (selectedRelease) {
+      onSelect({
+        album: selectedRelease.title,
+        artist: selectedRelease.artist,
+        coverUrl: releaseDetails?.cover_url || null
+      })
+      onClose()
+    }
+  }
+  
+  if (!isOpen) return null
+  
+  return (
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+      <div className="bg-gray-800 rounded-xl max-w-3xl w-full max-h-[80vh] flex flex-col">
+        <div className="p-4 border-b border-gray-700 flex items-center justify-between">
+          <h3 className="text-lg font-semibold flex items-center gap-2">
+            <Disc className="w-5 h-5 text-primary-400" />
+            Search MusicBrainz
+          </h3>
+          <button onClick={onClose} className="text-gray-400 hover:text-white">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        
+        <div className="p-4 space-y-4">
+          {/* Search inputs */}
+          <div className="flex gap-2">
+            <div className="flex-1">
+              <input
+                type="text"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
+                placeholder="Album name..."
+                className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:border-primary-500"
+              />
+            </div>
+            <div className="flex-1">
+              <input
+                type="text"
+                value={artist}
+                onChange={(e) => setArtist(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
+                placeholder="Artist (optional)..."
+                className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:border-primary-500"
+              />
+            </div>
+            <button
+              onClick={handleSearch}
+              disabled={isSearching || !query.trim()}
+              className="px-4 py-2 bg-primary-600 hover:bg-primary-700 disabled:bg-gray-700 rounded-lg flex items-center gap-2"
+            >
+              {isSearching ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+              Search
+            </button>
+          </div>
+          
+          {/* Results */}
+          <div className="flex gap-4 min-h-[300px]">
+            {/* Results list */}
+            <div className="flex-1 overflow-y-auto max-h-[400px] space-y-2">
+              {results.length === 0 && !isSearching && (
+                <div className="text-center py-8 text-gray-500">
+                  <Disc className="w-12 h-12 mx-auto mb-2 opacity-50" />
+                  <p>Search for an album to see results</p>
+                </div>
+              )}
+              {results.map((release) => (
+                <button
+                  key={release.id}
+                  onClick={() => handleSelectRelease(release)}
+                  className={`w-full text-left p-3 rounded-lg border transition-colors ${
+                    selectedRelease?.id === release.id
+                      ? 'bg-primary-500/20 border-primary-500'
+                      : 'bg-gray-700/50 border-gray-600 hover:border-gray-500'
+                  }`}
+                >
+                  <div className="font-medium">{release.title}</div>
+                  <div className="text-sm text-gray-400">{release.artist}</div>
+                  <div className="text-xs text-gray-500 flex gap-2 mt-1">
+                    {release.date && <span>{release.date}</span>}
+                    {release.country && <span>• {release.country}</span>}
+                    {release.track_count > 0 && <span>• {release.track_count} tracks</span>}
+                    {release.primary_type && <span>• {release.primary_type}</span>}
+                  </div>
+                </button>
+              ))}
+            </div>
+            
+            {/* Release details */}
+            {selectedRelease && (
+              <div className="w-64 flex-shrink-0 bg-gray-700/50 rounded-lg p-3">
+                <h4 className="font-medium mb-2">{selectedRelease.title}</h4>
+                <p className="text-sm text-gray-400 mb-3">{selectedRelease.artist}</p>
+                
+                {isLoadingDetails ? (
+                  <div className="flex items-center justify-center py-8">
+                    <Loader2 className="w-6 h-6 animate-spin text-gray-400" />
+                  </div>
+                ) : releaseDetails && (
+                  <>
+                    {releaseDetails.cover_url && (
+                      <img
+                        src={releaseDetails.cover_url}
+                        alt="Cover"
+                        className="w-full aspect-square object-cover rounded-lg mb-3"
+                      />
+                    )}
+                    {releaseDetails.tracks?.length > 0 && (
+                      <div className="text-xs text-gray-400 max-h-32 overflow-y-auto">
+                        <p className="font-medium mb-1">Tracks:</p>
+                        {releaseDetails.tracks.slice(0, 10).map((track, i) => (
+                          <div key={i} className="truncate">
+                            {track.position}. {track.title}
+                          </div>
+                        ))}
+                        {releaseDetails.tracks.length > 10 && (
+                          <div className="text-gray-500">...and {releaseDetails.tracks.length - 10} more</div>
+                        )}
+                      </div>
+                    )}
+                  </>
+                )}
+                
+                <a
+                  href={`https://musicbrainz.org/release/${selectedRelease.id}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-3 text-xs text-primary-400 hover:text-primary-300 flex items-center gap-1"
+                >
+                  View on MusicBrainz <ExternalLink className="w-3 h-3" />
+                </a>
+              </div>
+            )}
+          </div>
+        </div>
+        
+        <div className="p-4 border-t border-gray-700 flex justify-end gap-2">
+          <button
+            onClick={onClose}
+            className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleConfirmSelection}
+            disabled={!selectedRelease}
+            className="px-4 py-2 bg-primary-600 hover:bg-primary-700 disabled:bg-gray-700 disabled:text-gray-500 rounded-lg flex items-center gap-2"
+          >
+            <Check className="w-4 h-4" />
+            Use This Album
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function SeriesCard({ series, seriesIndex, onApply, applyingIndex }) {
   const [isExpanded, setIsExpanded] = useState(false)
   const [selectedTracks, setSelectedTracks] = useState(
@@ -87,6 +297,7 @@ function SeriesCard({ series, seriesIndex, onApply, applyingIndex }) {
   const [coverUrl, setCoverUrl] = useState('')
   const [showCoverModal, setShowCoverModal] = useState(false)
   const [showAlternatives, setShowAlternatives] = useState(false)
+  const [showMusicBrainzModal, setShowMusicBrainzModal] = useState(false)
   
   // Track if user has manually edited the inputs
   const [userEditedAlbum, setUserEditedAlbum] = useState(false)
@@ -103,6 +314,15 @@ function SeriesCard({ series, seriesIndex, onApply, applyingIndex }) {
     setGenreName(alt.genre || '')
     setAlbumArtistName(alt.album_artist || '')
     setShowAlternatives(false)
+  }
+  
+  // Function to apply MusicBrainz result
+  const applyMusicBrainzResult = (result) => {
+    setAlbumName(result.album)
+    setArtistName(result.artist || '')
+    if (result.coverUrl) {
+      setCoverUrl(result.coverUrl)
+    }
   }
   
   // Reset selection when tracks change, but preserve user-edited values
@@ -154,9 +374,11 @@ function SeriesCard({ series, seriesIndex, onApply, applyingIndex }) {
           <div className={`w-12 h-12 rounded-lg flex items-center justify-center ${
             series.is_orphan 
               ? 'bg-gradient-to-br from-yellow-500 to-orange-600' 
-              : 'bg-gradient-to-br from-primary-500 to-purple-600'
+              : series.is_album_group
+                ? 'bg-gradient-to-br from-green-500 to-teal-600'
+                : 'bg-gradient-to-br from-primary-500 to-purple-600'
           }`}>
-            <Disc3 className="w-6 h-6" />
+            {series.is_album_group ? <Disc className="w-6 h-6" /> : <Disc3 className="w-6 h-6" />}
           </div>
           <div>
             <h3 className="font-semibold text-lg">
@@ -175,6 +397,11 @@ function SeriesCard({ series, seriesIndex, onApply, applyingIndex }) {
                       (+{series.alternative_matches.length} more)
                     </button>
                   )}
+                </span>
+              )}
+              {series.is_album_group && (
+                <span className="ml-2 text-xs font-normal text-green-400">
+                  (from metadata)
                 </span>
               )}
             </h3>
@@ -282,14 +509,21 @@ function SeriesCard({ series, seriesIndex, onApply, applyingIndex }) {
             </div>
           </div>
 
-          {/* Cover Art */}
-          <div className="flex items-center gap-4">
+          {/* Cover Art & MusicBrainz */}
+          <div className="flex items-center gap-4 flex-wrap">
             <button
               onClick={() => setShowCoverModal(true)}
               className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg flex items-center gap-2"
             >
               <Image className="w-4 h-4" />
               {coverUrl ? 'Change Cover' : 'Add Cover Art'}
+            </button>
+            <button
+              onClick={() => setShowMusicBrainzModal(true)}
+              className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg flex items-center gap-2"
+            >
+              <Disc className="w-4 h-4" />
+              Search MusicBrainz
             </button>
             {coverUrl && (
               <div className="flex items-center gap-3">
@@ -342,7 +576,7 @@ function SeriesCard({ series, seriesIndex, onApply, applyingIndex }) {
                     : 'hover:bg-gray-700'
                 }`}
               >
-                <div className={`w-5 h-5 rounded border flex items-center justify-center ${
+                <div className={`w-5 h-5 rounded border flex items-center justify-center flex-shrink-0 ${
                   selectedTracks.includes(track.track_id)
                     ? 'bg-primary-500 border-primary-500'
                     : 'border-gray-600'
@@ -351,15 +585,17 @@ function SeriesCard({ series, seriesIndex, onApply, applyingIndex }) {
                     <Check className="w-3 h-3" />
                   )}
                 </div>
-                <div className="flex-1 min-w-0">
+                <div className="min-w-0 w-48 flex-shrink-0">
                   <p className="text-sm truncate">{track.filename}</p>
-                  <p className="text-xs text-gray-500">
-                    Current album: {track.current_album || track.matched_album || 'None'}
-                    {track.episode && ` • Episode ${track.episode}`}
+                  <p className="text-xs text-gray-500 truncate">
+                    {track.current_album || track.matched_album || 'No album'}
+                    {track.episode && ` • Ep ${track.episode}`}
                   </p>
                 </div>
+                {/* Waveform Player */}
+                <AudioPlayer trackId={track.track_id} compact className="flex-1" />
                 {(track.current_album === albumName || track.matched_album === albumName) && (
-                  <span className="text-xs text-green-400">✓ Already set</span>
+                  <span className="text-xs text-green-400 flex-shrink-0">✓</span>
                 )}
               </div>
             ))}
@@ -389,6 +625,15 @@ function SeriesCard({ series, seriesIndex, onApply, applyingIndex }) {
         onClose={() => setShowCoverModal(false)}
         onSelect={(url) => setCoverUrl(url)}
         defaultQuery={`${artistName || ''} ${albumName || ''}`.trim()}
+      />
+      
+      {/* MusicBrainz Search Modal */}
+      <MusicBrainzModal
+        isOpen={showMusicBrainzModal}
+        onClose={() => setShowMusicBrainzModal(false)}
+        onSelect={applyMusicBrainzResult}
+        defaultQuery={albumName}
+        defaultArtist={artistName}
       />
     </div>
   )
@@ -1117,13 +1362,13 @@ function Series() {
         <ErrorToast 
           errors={toast.errors} 
           message={toast.message}
-          onClose={() => setToast(null)} 
+          onClose={clearToast} 
         />
       )}
       {toast?.type === 'success' && (
         <SuccessToast 
           message={toast.message} 
-          onClose={() => setToast(null)} 
+          onClose={clearToast} 
         />
       )}
     </div>

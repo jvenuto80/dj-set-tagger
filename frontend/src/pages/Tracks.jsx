@@ -12,9 +12,12 @@ import {
   Filter,
   X,
   ChevronLeft,
-  ChevronRight
+  ChevronRight,
+  Play,
+  Pause
 } from 'lucide-react'
 import { getTracks, deleteTrack, batchMatch, batchApplyTags, getTrackFilters, getTrackStats } from '../api'
+import { MiniPlayer } from '../components/AudioPlayer'
 
 const statusFilters = [
   { value: '', label: 'All Tracks' },
@@ -54,6 +57,9 @@ function TrackRow({ track, selected, onSelect }) {
           <Square className="w-5 h-5" />
         )}
       </button>
+      
+      {/* Mini Player */}
+      <MiniPlayer trackId={track.id} />
       
       <div className="w-12 h-12 bg-gray-700 rounded flex items-center justify-center flex-shrink-0">
         {track.matched_cover_url ? (

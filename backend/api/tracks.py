@@ -616,6 +616,45 @@ async def detect_series(
                     }]
                     existing_track_ids.add(track.id)
         
+        # METHOD 5: Group by existing album metadata (for CD albums with tags)
+        # This helps detect albums that already have album tags but aren't series_tagged
+        album_groups = defaultdict(list)
+        for track in tracks:
+            if track.id in existing_track_ids:
+                continue  # Already in another group
+            
+            album = track.album or track.matched_album
+            if album and len(album) > 2:
+                album_normalized = re.sub(r'[^\w\s]', '', album.lower()).strip()
+                if album_normalized:
+                    album_groups[album_normalized].append({
+                        'track_id': track.id,
+                        'filename': track.filename,
+                        'display_name': clean_filename(track.filename),
+                        'current_album': track.album,
+                        'matched_album': track.matched_album,
+                        'current_artist': track.artist,
+                        'current_genre': track.genre,
+                        'matched_genre': track.matched_genre,
+                        'current_album_artist': track.album_artist,
+                        'matched_album_artist': track.matched_album_artist,
+                        'episode': None,
+                        'directory': track.directory,
+                        'suggested_album': album,  # Use existing album as suggestion
+                        'suggested_artist': track.artist,
+                        'suggested_genre': track.genre or '',
+                        'suggested_album_artist': track.album_artist or '',
+                        'is_album_group': True,  # Mark as album-based group
+                    })
+        
+        # Add album groups that meet minimum tracks
+        for album_norm, album_tracks in album_groups.items():
+            if len(album_tracks) >= min_tracks:
+                album_key = f"album:{album_norm}"
+                series_groups[album_key] = album_tracks
+                for t in album_tracks:
+                    existing_track_ids.add(t['track_id'])
+        
         # Build final series list
         series_list = []
         for normalized, track_list in series_groups.items():
@@ -696,6 +735,9 @@ async def detect_series(
                         # Include alternative matches if available
                         if track_list[0].get('alternative_matches'):
                             series_entry['alternative_matches'] = track_list[0].get('alternative_matches')
+                    # Mark if this is an album-based group (from existing metadata)
+                    if normalized.startswith('album:'):
+                        series_entry['is_album_group'] = True
                     series_list.append(series_entry)
         
         return sorted(series_list, key=lambda x: (-1 if x.get('is_orphan') else 0, -x['track_count']))
@@ -840,6 +882,83 @@ import uuid
 from datetime import datetime
 
 tagging_jobs = {}  # job_id -> job status dict
+
+
+@router.get("/musicbrainz/search")
+async def search_musicbrainz(
+    query: str = Query(..., description="Album name to search for"),
+    artist: Optional[str] = Query(None, description="Artist name to narrow results")
+):
+    """Search MusicBrainz for album/release information"""
+    from backend.services.musicbrainz import search_album
+    
+    results = await search_album(query, artist, limit=10)
+    return {"results": results}
+
+
+@router.get("/musicbrainz/release/{release_id}")
+async def get_musicbrainz_release(release_id: str):
+    """Get track listing and details for a MusicBrainz release"""
+    from backend.services.musicbrainz import get_release_tracks, get_cover_art_url
+    
+    tracks = await get_release_tracks(release_id)
+    cover_url = await get_cover_art_url(release_id)
+    
+    return {
+        "release_id": release_id,
+        "tracks": tracks,
+        "cover_url": cover_url
+    }
+
+
+@router.post("/musicbrainz/search-by-tracks")
+async def search_musicbrainz_by_tracks(track_names: List[str]):
+    """Search MusicBrainz by matching track names to identify an album"""
+    from backend.services.musicbrainz import search_by_tracks
+    
+    if len(track_names) < 2:
+        raise HTTPException(status_code=400, detail="At least 2 track names required")
+    
+    results = await search_by_tracks(track_names, limit=5)
+    return {"results": results}
+
+
+@router.get("/stream/{track_id}")
+async def stream_track(track_id: int):
+    """Stream audio file for playback"""
+    from fastapi.responses import FileResponse
+    import mimetypes
+    
+    async with get_db() as db:
+        result = await db.execute(select(Track).where(Track.id == track_id))
+        track = result.scalar_one_or_none()
+        
+        if not track:
+            raise HTTPException(status_code=404, detail="Track not found")
+        
+        if not os.path.exists(track.filepath):
+            raise HTTPException(status_code=404, detail="Audio file not found")
+        
+        # Determine media type
+        mime_type, _ = mimetypes.guess_type(track.filepath)
+        if not mime_type:
+            # Default based on extension
+            ext = os.path.splitext(track.filepath)[1].lower()
+            mime_types = {
+                '.mp3': 'audio/mpeg',
+                '.m4a': 'audio/mp4',
+                '.flac': 'audio/flac',
+                '.wav': 'audio/wav',
+                '.ogg': 'audio/ogg',
+                '.aac': 'audio/aac',
+            }
+            mime_type = mime_types.get(ext, 'audio/mpeg')
+        
+        return FileResponse(
+            track.filepath,
+            media_type=mime_type,
+            filename=track.filename
+        )
 
 
 @router.post("/series/apply-album")

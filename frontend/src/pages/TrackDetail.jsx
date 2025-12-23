@@ -15,7 +15,9 @@ import {
   FileAudio,
   Loader2,
   Image,
-  RefreshCw
+  RefreshCw,
+  Play,
+  Pause
 } from 'lucide-react'
 import { 
   getTrack, 
@@ -29,6 +31,7 @@ import {
   updateTrackCover
 } from '../api'
 import ProgressButton from '../components/ProgressButton'
+import AudioPlayer from '../components/AudioPlayer'
 
 function formatDuration(seconds) {
   if (!seconds) return '--:--'
@@ -626,6 +629,12 @@ function TrackDetail() {
             <div className="mt-4 pt-4 border-t border-gray-700">
               <p className="text-sm text-gray-400 break-all">{track.filepath}</p>
             </div>
+          </div>
+
+          {/* Audio Player */}
+          <div className="bg-gray-800 rounded-xl p-6 border border-gray-700">
+            <h2 className="text-lg font-semibold mb-4">Preview</h2>
+            <AudioPlayer trackId={track.id} />
           </div>
 
           {/* Actions */}
