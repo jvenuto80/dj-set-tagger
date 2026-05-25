@@ -238,12 +238,34 @@ class GoogleTracklistSearch:
         logger.info(f"Found {len(results)} Google results")
         return results
     
+    # Allowed domains for URL scraping to prevent SSRF
+    ALLOWED_SCRAPE_DOMAINS = {
+        "1001tracklists.com", "www.1001tracklists.com",
+        "mixesdb.com", "www.mixesdb.com",
+        "discogs.com", "www.discogs.com",
+        "musicbrainz.org", "www.musicbrainz.org",
+        "djmag.com", "www.djmag.com",
+        "reddit.com", "www.reddit.com", "old.reddit.com",
+        "setlist.fm", "www.setlist.fm",
+    }
+
     async def scrape_tracklist_from_url(self, url: str) -> Optional[Dict]:
         """
         Scrape tracklist information from a URL
         Returns dict with: title, artist, tracks, genres, date, source_url
         """
-        domain = urlparse(url).netloc.replace('www.', '')
+        parsed = urlparse(url)
+        domain = parsed.netloc.replace('www.', '')
+        
+        # Security: only allow scraping from known tracklist domains
+        if parsed.netloc not in self.ALLOWED_SCRAPE_DOMAINS:
+            logger.warning(f"Blocked scrape attempt to non-allowed domain: {parsed.netloc}")
+            return None
+        
+        # Security: only allow http/https schemes
+        if parsed.scheme not in ("http", "https"):
+            logger.warning(f"Blocked scrape attempt with non-HTTP scheme: {parsed.scheme}")
+            return None
         
         soup = await self._fetch_page(url, wait_time=3.0)
         if not soup:
@@ -909,31 +931,33 @@ class GoogleSearchService:
     
     async def search_cover_art(self, query: str, num_results: int = 20) -> List[Dict]:
         """
-        Search for cover art images by scraping pages from web search results
-        
-        Args:
-            query: Search query (artist + title)
-            num_results: Maximum number of results to return
-            
-        Returns:
-            List of dicts with: url, source, title
+        Search for cover art images using iTunes Search API (fast, reliable) 
+        with DDG scraping fallback.
         """
         covers = []
         logger.info(f"Searching for cover art: {query}")
         
-        # Use the existing DDG search which works better
+        # Try iTunes Search API first (fast, reliable, no auth)
+        try:
+            itunes_covers = await self._search_itunes_cover(query)
+            covers.extend(itunes_covers)
+        except Exception as e:
+            logger.debug(f"iTunes cover search error: {e}")
+        
+        if len(covers) >= num_results:
+            logger.info(f"Returning {len(covers)} cover options from iTunes")
+            return covers[:num_results]
+        
+        # Fallback to DDG scraping
         search_queries = [
             f"{query} album cover",
             f"{query} discogs",
-            f"{query} artwork soundcloud"
         ]
         
         async with aiohttp.ClientSession() as session:
             for search_query in search_queries:
                 try:
-                    # Use DuckDuckGo HTML (the one that works in _search_duckduckgo_lite)
                     url = "https://lite.duckduckgo.com/lite/"
-                    
                     logger.debug(f"Searching DDG for covers: {search_query}")
                     
                     async with session.post(
@@ -943,48 +967,77 @@ class GoogleSearchService:
                             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
                             "Accept": "text/html,application/xhtml+xml",
                         },
-                        allow_redirects=True
+                        allow_redirects=True,
+                        timeout=aiohttp.ClientTimeout(total=10)
                     ) as response:
-                        # DDG Lite may return 202 on first request, then redirect
                         if response.status not in [200, 202]:
-                            logger.warning(f"DDG returned status {response.status}")
                             continue
                         html = await response.text()
                     
                     soup = BeautifulSoup(html, "lxml")
-                    
-                    # Find result URLs - DDG Lite uses table-based layout
                     links = soup.select('a.result-link') or soup.select('td a[href^="http"]')
-                    logger.debug(f"Found {len(links)} DDG links for covers")
                     
-                    for link in links[:10]:
+                    for link in links[:5]:
                         href = link.get('href', '')
                         if not href.startswith('http') or 'duckduckgo.com' in href:
                             continue
-                        
-                        logger.debug(f"Extracting covers from: {href}")
-                        
-                        # Fetch the page and extract cover image
                         try:
                             page_covers = await self._extract_covers_from_page(href, session)
-                            logger.debug(f"Found {len(page_covers)} covers from {href}")
                             for cover in page_covers:
                                 if cover['url'] not in [c['url'] for c in covers]:
                                     covers.append(cover)
                                     if len(covers) >= num_results:
-                                        logger.info(f"Returning {len(covers)} cover options")
                                         return covers
-                        except Exception as e:
-                            logger.debug(f"Error extracting covers from {href}: {e}")
+                        except Exception:
                             continue
                     
                     await asyncio.sleep(0.5)
-                    
                 except Exception as e:
-                    logger.error(f"Cover art search error: {e}")
+                    logger.debug(f"DDG cover search error: {e}")
                     continue
         
         logger.info(f"Returning {len(covers)} cover options")
+        return covers
+    
+    async def _search_itunes_cover(self, query: str, limit: int = 10) -> List[Dict]:
+        """Search iTunes Search API for cover art — free, fast, no auth needed"""
+        covers = []
+        try:
+            async with aiohttp.ClientSession() as session:
+                params = {
+                    "term": query,
+                    "media": "music",
+                    "entity": "song",
+                    "limit": limit
+                }
+                async with session.get(
+                    "https://itunes.apple.com/search",
+                    params=params,
+                    timeout=aiohttp.ClientTimeout(total=10)
+                ) as response:
+                    if response.status != 200:
+                        return covers
+                    # iTunes returns text/javascript content type, so read as text and parse
+                    text = await response.text()
+                    import json as json_mod
+                    data = json_mod.loads(text)
+                
+                seen_urls = set()
+                for result in data.get("results", []):
+                    # Get high-res artwork (replace 100x100 with 600x600)
+                    artwork = result.get("artworkUrl100", "")
+                    if artwork:
+                        hi_res = artwork.replace("100x100bb", "600x600bb")
+                        if hi_res not in seen_urls:
+                            seen_urls.add(hi_res)
+                            covers.append({
+                                "url": hi_res,
+                                "source": "iTunes",
+                                "title": f"{result.get('artistName', '')} - {result.get('trackName', '')}"
+                            })
+        except Exception as e:
+            logger.debug(f"iTunes search error: {e}")
+        
         return covers
     
     async def _extract_covers_from_page(self, url: str, session: aiohttp.ClientSession) -> List[Dict]:

@@ -18,46 +18,135 @@ import {
   Filter,
   Fingerprint,
   Eye,
-  EyeOff
+  EyeOff,
+  Info
 } from 'lucide-react'
-import { getSettings, updateSettings, listDirectories, resyncDatabase, backfillSeriesMarkers, getLogs, clearLogs, getFingerprintStatus } from '../api'
+import { getSettings, updateSettings, listDirectories, resyncDatabase, backfillSeriesMarkers, getLogs, clearLogs, getFingerprintStatus, clearDatabase, getAIModels, updateAISettings, getEnrichmentSettings, updateEnrichmentSettings, clearEnrichmentCache, testEnrichment } from '../api'
+import { isTauri, pickFolder } from '../tauri'
 import ProgressButton from '../components/ProgressButton'
 
-function DirectoryBrowser({ currentPath, onSelect }) {
-  const { data: dirs, isLoading } = useQuery({
+// Native-only: paths are shown as-is
+const displayPath = (path) => path || ''
+
+function DirectoryBrowser({ currentPath, onSelect, onConfirm, onCancel }) {
+  const [manualPath, setManualPath] = useState('')
+  const rootPath = '/'
+
+  const { data: dirs, isLoading, isError, error } = useQuery({
     queryKey: ['directories', currentPath],
     queryFn: () => listDirectories(currentPath),
+    retry: false,
   })
 
   if (isLoading) {
-    return <div className="p-4 text-gray-400">Loading...</div>
+    return (
+      <div className="bg-gray-700 rounded-lg border border-gray-600 p-6 text-center">
+        <div className="w-5 h-5 border-2 border-primary-500 border-t-transparent rounded-full animate-spin mx-auto mb-2" />
+        <p className="text-sm text-gray-400">Loading folders...</p>
+      </div>
+    )
   }
 
+  if (isError) {
+    return (
+      <div className="bg-gray-700 rounded-lg border border-gray-600 overflow-hidden">
+        <div className="p-4 text-center">
+          <p className="text-yellow-400 text-sm mb-2">
+            {error?.response?.status === 408 
+              ? 'This folder is on a slow or network mount and couldn\'t be browsed.'
+              : 'Unable to browse this folder.'}
+          </p>
+          <p className="text-gray-400 text-xs mb-3">You can type the path directly instead.</p>
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={manualPath}
+              onChange={(e) => setManualPath(e.target.value)}
+              placeholder={displayPath(currentPath) + '/...'}
+              className="flex-1 px-3 py-2 bg-gray-600 border border-gray-500 rounded text-sm focus:outline-none focus:border-primary-500"
+            />
+            <button
+              type="button"
+              onClick={() => onConfirm(manualPath)}
+              disabled={!manualPath}
+              className="px-3 py-2 bg-primary-600 hover:bg-primary-700 rounded text-sm disabled:opacity-50"
+            >
+              Use Path
+            </button>
+          </div>
+        </div>
+        <div className="px-4 py-3 bg-gray-600/30 border-t border-gray-600 flex justify-between">
+          <button type="button" onClick={() => onSelect(dirs?.parent || rootPath)} className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-sm">
+            Back
+          </button>
+          <button type="button" onClick={onCancel} className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-sm">
+            Cancel
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  // Don't let user navigate above root
+  const canGoUp = dirs?.parent && currentPath !== rootPath
+
   return (
-    <div className="bg-gray-700 rounded-lg max-h-64 overflow-auto">
-      {dirs?.parent && (
-        <button
-          onClick={() => onSelect(dirs.parent)}
-          className="w-full flex items-center gap-2 px-4 py-2 hover:bg-gray-600 text-left"
-        >
-          <ChevronUp className="w-4 h-4" />
-          <span>..</span>
-        </button>
-      )}
-      {dirs?.directories?.map((dir) => (
-        <button
-          key={dir.path}
-          onClick={() => onSelect(dir.path)}
-          className="w-full flex items-center gap-2 px-4 py-2 hover:bg-gray-600 text-left"
-        >
-          <Folder className="w-4 h-4 text-primary-500" />
-          <span className="truncate">{dir.name}</span>
-          <ChevronRight className="w-4 h-4 ml-auto" />
-        </button>
-      ))}
-      {dirs?.directories?.length === 0 && (
-        <div className="p-4 text-gray-400 text-sm">No subdirectories</div>
-      )}
+    <div className="bg-gray-700 rounded-lg border border-gray-600 overflow-hidden">
+      {/* Current location bar */}
+      <div className="px-4 py-2 bg-gray-600/50 border-b border-gray-600 flex items-center gap-2">
+        <Folder className="w-4 h-4 text-primary-400 flex-shrink-0" />
+        <span className="text-sm text-white truncate">{displayPath(currentPath)}</span>
+      </div>
+      
+      {/* Directory list */}
+      <div className="max-h-56 overflow-auto">
+        {canGoUp && (
+          <button
+            onClick={() => onSelect(dirs.parent)}
+            className="w-full flex items-center gap-2 px-4 py-2 hover:bg-gray-600 text-left text-gray-300"
+          >
+            <ChevronUp className="w-4 h-4" />
+            <span>Back</span>
+          </button>
+        )}
+        {dirs?.directories?.map((dir) => (
+          <button
+            key={dir.path}
+            onClick={() => onSelect(dir.path)}
+            className="w-full flex items-center gap-2 px-4 py-2.5 hover:bg-gray-600 text-left"
+          >
+            <Folder className="w-4 h-4 text-primary-500 flex-shrink-0" />
+            <span className="truncate flex-1">{dir.name}</span>
+            <ChevronRight className="w-4 h-4 text-gray-500" />
+          </button>
+        ))}
+        {dirs?.directories?.length === 0 && (
+          <div className="p-4 text-gray-400 text-sm text-center">No subfolders</div>
+        )}
+      </div>
+      
+      {/* Action bar */}
+      <div className="px-4 py-3 bg-gray-600/30 border-t border-gray-600 flex items-center justify-between gap-2">
+        <span className="text-xs text-gray-400 truncate hidden sm:block">
+          {displayPath(currentPath)}
+        </span>
+        <div className="flex gap-2 ml-auto">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-sm"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={() => onConfirm(currentPath)}
+            className="px-3 py-1.5 bg-primary-600 hover:bg-primary-700 rounded text-sm"
+          >
+            Select Folder
+          </button>
+        </div>
+      </div>
     </div>
   )
 }
@@ -70,13 +159,17 @@ function Settings() {
   const [browsingIndex, setBrowsingIndex] = useState(0)  // Which directory we're browsing for
   const [resyncResult, setResyncResult] = useState(null)
   const [backfillResult, setBackfillResult] = useState(null)
+  const [clearDbResult, setClearDbResult] = useState(null)
+  const [clearDbConfirm, setClearDbConfirm] = useState(false)
   const [showApiKey, setShowApiKey] = useState(false)
   const [logLevel, setLogLevel] = useState('')
   const logContainerRef = useRef(null)
 
-  const { data: settings, isLoading } = useQuery({
+  const { data: settings, isLoading, isError, error } = useQuery({
     queryKey: ['settings'],
     queryFn: getSettings,
+    retry: 5,
+    retryDelay: 1000,
   })
 
   const { data: fpStatus } = useQuery({
@@ -88,16 +181,18 @@ function Settings() {
   const [formData, setFormData] = useState(null)
 
   // Initialize form when settings load
-  if (settings && !formData) {
-    setFormData({
-      music_dirs: settings.music_dirs || [settings.music_dir],
-      scan_extensions: settings.scan_extensions.join(', '),
-      fuzzy_threshold: settings.fuzzy_threshold,
-      tracklists_delay: settings.tracklists_delay,
-      min_duration_minutes: settings.min_duration_minutes || 0,
-      acoustid_api_key: settings.acoustid_api_key || '',
-    })
-  }
+  useEffect(() => {
+    if (settings && !formData) {
+      setFormData({
+        music_dirs: settings.music_dirs || [settings.music_dir],
+        scan_extensions: (settings.scan_extensions || []).join(', '),
+        fuzzy_threshold: settings.fuzzy_threshold,
+        tracklists_delay: settings.tracklists_delay,
+        min_duration_minutes: settings.min_duration_minutes || 0,
+        acoustid_api_key: settings.acoustid_api_key || '',
+      })
+    }
+  }, [settings])
 
   const updateMutation = useMutation({
     mutationFn: updateSettings,
@@ -127,6 +222,89 @@ function Settings() {
     onError: (error) => {
       setBackfillResult({ error: error.message || 'Backfill failed' })
     }
+  })
+
+  const clearDbMutation = useMutation({
+    mutationFn: clearDatabase,
+    onSuccess: (data) => {
+      setClearDbResult(data)
+      setClearDbConfirm(false)
+      queryClient.invalidateQueries(['tracks'])
+      queryClient.invalidateQueries(['series'])
+      queryClient.invalidateQueries(['taggedSeries'])
+      queryClient.invalidateQueries(['recentTracks'])
+      queryClient.invalidateQueries(['duplicates'])
+    },
+    onError: (error) => {
+      setClearDbResult({ error: error.message || 'Clear failed' })
+      setClearDbConfirm(false)
+    }
+  })
+
+  // AI Model
+  const { data: aiModels, refetch: refetchAIModels, isLoading: isLoadingAIModels } = useQuery({
+    queryKey: ['aiModels'],
+    queryFn: getAIModels,
+    retry: 1,
+  })
+
+  const aiSettingsMutation = useMutation({
+    mutationFn: updateAISettings,
+    onSuccess: () => {
+      queryClient.invalidateQueries(['aiModels'])
+    },
+  })
+
+  // Enrichment (MusicBrainz / Last.fm / AcoustID / SearXNG)
+  const { data: enrichmentCfg, refetch: refetchEnrichment } = useQuery({
+    queryKey: ['enrichmentSettings'],
+    queryFn: getEnrichmentSettings,
+    retry: 1,
+  })
+
+  const [enrichmentForm, setEnrichmentForm] = useState({
+    enabled: true,
+    use_web_search: true,
+    lastfm_api_key: '',
+    searxng_url: '',
+    discogs_token: '',
+    spotify_client_id: '',
+    spotify_client_secret: '',
+  })
+  const [enrichmentTestResult, setEnrichmentTestResult] = useState(null)
+  const [enrichmentTestQuery, setEnrichmentTestQuery] = useState({ artist: '', title: '' })
+
+  useEffect(() => {
+    if (enrichmentCfg) {
+      setEnrichmentForm((prev) => ({
+        ...prev,
+        enabled: enrichmentCfg.enabled,
+        use_web_search: enrichmentCfg.use_web_search,
+        searxng_url: enrichmentCfg.searxng_url || '',
+        // Keep whatever was typed; only sync key fields when blank
+        lastfm_api_key: prev.lastfm_api_key,
+        discogs_token: prev.discogs_token,
+        spotify_client_id: prev.spotify_client_id,
+        spotify_client_secret: prev.spotify_client_secret,
+      }))
+    }
+  }, [enrichmentCfg])
+
+  const enrichmentSaveMutation = useMutation({
+    mutationFn: updateEnrichmentSettings,
+    onSuccess: () => {
+      refetchEnrichment()
+    },
+  })
+
+  const enrichmentClearMutation = useMutation({
+    mutationFn: clearEnrichmentCache,
+  })
+
+  const enrichmentTestMutation = useMutation({
+    mutationFn: ({ artist, title }) => testEnrichment(artist, title),
+    onSuccess: (data) => setEnrichmentTestResult(data),
+    onError: (err) => setEnrichmentTestResult({ error: err?.message || 'test failed' }),
   })
 
   // Logs query
@@ -173,16 +351,16 @@ function Settings() {
   const selectDirectory = (path) => {
     setBrowsingPath(path)
   }
-
-  const confirmDirectory = () => {
-    const newDirs = [...formData.music_dirs]
-    newDirs[browsingIndex] = browsingPath
-    setFormData({ ...formData, music_dirs: newDirs })
-    setShowDirBrowser(false)
-  }
   
-  const addMountPoint = () => {
-    setFormData({ ...formData, music_dirs: [...formData.music_dirs, ''] })
+  const addMountPoint = async () => {
+    if (isTauri()) {
+      const selected = await pickFolder()
+      if (selected) {
+        setFormData({ ...formData, music_dirs: [...formData.music_dirs, selected] })
+      }
+    } else {
+      setFormData({ ...formData, music_dirs: [...formData.music_dirs, ''] })
+    }
   }
   
   const removeMountPoint = (index) => {
@@ -195,6 +373,16 @@ function Settings() {
     const newDirs = [...formData.music_dirs]
     newDirs[index] = value
     setFormData({ ...formData, music_dirs: newDirs })
+  }
+
+  if (isError) {
+    return (
+      <div className="text-center py-12">
+        <AlertTriangle className="w-8 h-8 text-red-400 mx-auto mb-3" />
+        <p className="text-red-400 mb-2">Failed to load settings</p>
+        <p className="text-gray-500 text-sm">{error?.message || 'Backend not reachable'}</p>
+      </div>
+    )
   }
 
   if (isLoading || !formData) {
@@ -264,85 +452,83 @@ function Settings() {
             {/* Music Directories */}
             <div className="bg-gray-800 rounded-xl p-6 border border-gray-700">
               <div className="flex items-center justify-between mb-4">
-                <h2 className="text-lg font-semibold">Music Directories</h2>
+                <h2 className="text-lg font-semibold">Music Folders</h2>
                 <button
                   type="button"
                   onClick={addMountPoint}
                   className="flex items-center gap-1 px-3 py-1.5 bg-primary-600 hover:bg-primary-700 rounded-lg text-sm"
                 >
                   <Plus className="w-4 h-4" />
-                  Add Mount Point
+                  Add Folder
                 </button>
               </div>
           
           <div className="space-y-3">
             {formData.music_dirs.map((dir, index) => (
               <div key={index} className="space-y-2">
-                <div className="flex gap-2">
+                <div className="flex gap-2 items-center">
                   <input
                     type="text"
-                    value={dir}
-                    onChange={(e) => updateMountPoint(index, e.target.value)}
-                    placeholder="/path/to/music"
-                    className="flex-1 px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:border-primary-500"
+                    value={displayPath(dir)}
+                    onChange={(e) => {
+                      updateMountPoint(index, e.target.value)
+                    }}
+                    placeholder="Click Browse or type a path (e.g. /Users/you/Music)"
+                    className="flex-1 px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-sm focus:outline-none focus:border-primary-500"
                   />
                   <button
                     type="button"
-                    onClick={() => {
-                      setBrowsingPath(dir || '/')
-                      setBrowsingIndex(index)
-                      setShowDirBrowser(showDirBrowser && browsingIndex === index ? false : true)
+                    onClick={async () => {
+                      if (isTauri()) {
+                        const selected = await pickFolder()
+                        if (selected) {
+                          const newDirs = [...formData.music_dirs]
+                          newDirs[index] = selected
+                          setFormData({ ...formData, music_dirs: newDirs })
+                        }
+                      } else {
+                        const startPath = dir || '/'
+                        setBrowsingPath(startPath)
+                        setBrowsingIndex(index)
+                        setShowDirBrowser(showDirBrowser && browsingIndex === index ? false : true)
+                      }
                     }}
-                    className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg"
-                    title="Browse"
+                    className="px-4 py-2 bg-primary-600 hover:bg-primary-700 rounded-lg text-sm flex items-center gap-2"
                   >
-                    <Folder className="w-5 h-5" />
+                    <Folder className="w-4 h-4" />
+                    <span className="hidden sm:inline">Browse</span>
                   </button>
                   {formData.music_dirs.length > 1 && (
                     <button
                       type="button"
                       onClick={() => removeMountPoint(index)}
-                      className="px-4 py-2 bg-red-600/20 hover:bg-red-600/30 text-red-400 rounded-lg"
+                      className="px-3 py-2 bg-red-600/20 hover:bg-red-600/30 text-red-400 rounded-lg"
                       title="Remove"
                     >
-                      <Trash2 className="w-5 h-5" />
+                      <Trash2 className="w-4 h-4" />
                     </button>
                   )}
                 </div>
                 
                 {showDirBrowser && browsingIndex === index && (
-                  <div className="space-y-2 ml-4 border-l-2 border-gray-600 pl-4">
-                    <div className="text-sm text-gray-400">
-                      Current: <span className="text-white">{browsingPath}</span>
-                    </div>
-                    <DirectoryBrowser
-                      currentPath={browsingPath}
-                      onSelect={selectDirectory}
-                    />
-                    <div className="flex gap-2">
-                      <button
-                        type="button"
-                        onClick={confirmDirectory}
-                        className="px-4 py-2 bg-primary-600 hover:bg-primary-700 rounded-lg text-sm"
-                      >
-                        Select This Directory
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setShowDirBrowser(false)}
-                        className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm"
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  </div>
+                  <DirectoryBrowser
+                    currentPath={browsingPath}
+                    onSelect={selectDirectory}
+                    onConfirm={(path) => {
+                      const newDirs = [...formData.music_dirs]
+                      newDirs[index] = path
+                      setFormData({ ...formData, music_dirs: newDirs })
+                      setShowDirBrowser(false)
+                    }}
+                    onCancel={() => setShowDirBrowser(false)}
+                  />
                 )}
               </div>
             ))}
           </div>
           
           <p className="text-sm text-gray-500 mt-3">
-            Add multiple mount points to scan music from different locations.
+            Choose the folders on your computer that contain music to scan and tag.
           </p>
         </div>
 
@@ -514,7 +700,7 @@ function Settings() {
             type="button"
             onClick={() => setFormData({
               music_dirs: settings.music_dirs || [settings.music_dir],
-              scan_extensions: settings.scan_extensions.join(', '),
+              scan_extensions: (settings.scan_extensions || []).join(', '),
               fuzzy_threshold: settings.fuzzy_threshold,
               tracklists_delay: settings.tracklists_delay,
               min_duration_minutes: settings.min_duration_minutes || 0,
@@ -661,6 +847,361 @@ function Settings() {
                       </div>
                     )}
                   </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* AI Model (Ollama) */}
+          <div className="border-t border-gray-700 pt-4 mt-4">
+            <h3 className="text-lg font-semibold text-white mb-2 flex items-center gap-2">
+              <SettingsIcon className="w-5 h-5" />
+              AI Genre Classification (Ollama)
+            </h3>
+            <p className="text-gray-400 text-sm mb-3">
+              Choose which locally-installed Ollama model to use for genre classification during scans.
+              The selected model must be pulled in Ollama (<code className="bg-gray-700 px-1 rounded">ollama pull &lt;model&gt;</code>).
+            </p>
+
+            {isLoadingAIModels ? (
+              <div className="text-sm text-gray-400">Loading models...</div>
+            ) : aiModels?.available_models?.length > 0 ? (
+              <div className="flex items-center gap-3">
+                <select
+                  value={aiModels.current_model || ''}
+                  onChange={(e) => aiSettingsMutation.mutate({ model: e.target.value })}
+                  disabled={aiSettingsMutation.isPending}
+                  className="bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white text-sm flex-1 max-w-md"
+                >
+                  {!aiModels.available_models.includes(aiModels.current_model) && (
+                    <option value={aiModels.current_model}>
+                      {aiModels.current_model} (not installed)
+                    </option>
+                  )}
+                  {aiModels.available_models.map((m) => (
+                    <option key={m} value={m}>{m}</option>
+                  ))}
+                </select>
+                <button
+                  onClick={() => refetchAIModels()}
+                  className="p-2 text-gray-400 hover:text-white"
+                  title="Refresh model list"
+                >
+                  <RefreshCw className="w-4 h-4" />
+                </button>
+                {aiSettingsMutation.isPending && (
+                  <span className="text-xs text-gray-400">Saving...</span>
+                )}
+                {aiSettingsMutation.isSuccess && !aiSettingsMutation.isPending && (
+                  <span className="text-xs text-green-400 flex items-center gap-1">
+                    <CheckCircle2 className="w-4 h-4" /> Saved
+                  </span>
+                )}
+              </div>
+            ) : (
+              <div className="bg-yellow-900/30 border border-yellow-700 rounded p-3 text-sm text-yellow-200">
+                <div className="flex items-center gap-2 mb-1">
+                  <AlertTriangle className="w-4 h-4" />
+                  <strong>No Ollama models detected</strong>
+                </div>
+                <p className="text-xs">
+                  Make sure Ollama is running (<code className="bg-gray-800 px-1 rounded">ollama serve</code>)
+                  and you have at least one model installed
+                  (e.g., <code className="bg-gray-800 px-1 rounded">ollama pull qwen2.5:7b</code>).
+                  Current model: <code className="bg-gray-800 px-1 rounded">{aiModels?.current_model || 'unknown'}</code>
+                </p>
+                <button
+                  onClick={() => refetchAIModels()}
+                  className="mt-2 text-xs underline hover:text-yellow-100"
+                >
+                  Retry
+                </button>
+              </div>
+            )}
+
+            {/* Two-pass classification (reasoning + classifier) */}
+            <div className="mt-4 pt-4 border-t border-gray-700/60">
+              <div className="flex items-center justify-between mb-2">
+                <div>
+                  <h4 className="text-sm font-semibold text-white">Two-Pass Classification</h4>
+                  <p className="text-xs text-gray-400">
+                    Pass 1: reasoning model analyzes all signals (think mode). Pass 2: classifier picks final genres from taxonomy.
+                    Slower but significantly more accurate for ambiguous tracks.
+                  </p>
+                </div>
+              </div>
+              <label className="flex items-center gap-2 text-sm text-gray-200 mb-2">
+                <input
+                  type="checkbox"
+                  checked={!!aiModels?.two_pass_enabled}
+                  onChange={(e) => aiSettingsMutation.mutate({ two_pass_enabled: e.target.checked })}
+                  disabled={aiSettingsMutation.isPending}
+                />
+                Enable two-pass (reasoning → classifier)
+              </label>
+              <div className="flex items-center gap-3">
+                <label className="text-xs text-gray-400 w-32">Reasoning model:</label>
+                <select
+                  value={aiModels?.reasoning_model || ''}
+                  onChange={(e) => aiSettingsMutation.mutate({ reasoning_model: e.target.value })}
+                  disabled={aiSettingsMutation.isPending || !aiModels?.available_models?.length}
+                  className="bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white text-sm flex-1 max-w-md"
+                >
+                  {aiModels?.reasoning_model && !aiModels?.available_models?.includes(aiModels.reasoning_model) && (
+                    <option value={aiModels.reasoning_model}>
+                      {aiModels.reasoning_model} (not installed)
+                    </option>
+                  )}
+                  {aiModels?.available_models?.map((m) => (
+                    <option key={m} value={m}>{m}</option>
+                  ))}
+                </select>
+              </div>
+              <p className="text-xs text-gray-500 mt-2">
+                Tip: <code className="bg-gray-800 px-1 rounded">deepseek-r1:latest</code> or any qwen3 model with reasoning works well as the investigator.
+              </p>
+            </div>
+          </div>
+
+          {/* AI Enrichment (MusicBrainz / Last.fm / AcoustID / SearXNG) */}
+          <div className="border-t border-gray-700 pt-4 mt-4">
+            <h3 className="text-lg font-semibold text-white mb-2 flex items-center gap-2">
+              <SettingsIcon className="w-5 h-5" />
+              AI Enrichment Sources
+            </h3>
+            <p className="text-gray-400 text-sm mb-3">
+              Before classifying, fetch authoritative tags from external sources and feed them to the model.
+              This dramatically improves accuracy for obscure artists. Results are cached per artist for 90 days.
+            </p>
+
+            <div className="space-y-3">
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={enrichmentForm.enabled}
+                  onChange={(e) => setEnrichmentForm({ ...enrichmentForm, enabled: e.target.checked })}
+                  className="accent-primary-500"
+                />
+                <span>Enable enrichment (MusicBrainz + AcoustID always on when keys present)</span>
+              </label>
+
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={enrichmentForm.use_web_search}
+                  onChange={(e) => setEnrichmentForm({ ...enrichmentForm, use_web_search: e.target.checked })}
+                  className="accent-primary-500"
+                />
+                <span>Use SearXNG web search as fallback grounding</span>
+              </label>
+
+              <div>
+                <label className="block text-sm text-gray-400 mb-1">Last.fm API Key</label>
+                <input
+                  type="password"
+                  value={enrichmentForm.lastfm_api_key}
+                  onChange={(e) => setEnrichmentForm({ ...enrichmentForm, lastfm_api_key: e.target.value })}
+                  placeholder={enrichmentCfg?.lastfm_api_key_set ? '••••••• (saved) — type to replace' : 'Get one at last.fm/api/account/create'}
+                  className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:border-primary-500"
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  Free at{' '}
+                  <a href="https://www.last.fm/api/account/create" target="_blank" rel="noopener noreferrer"
+                     className="text-primary-400 hover:underline">last.fm/api/account/create</a>.
+                  Provides user-voted artist + track tags.
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-sm text-gray-400 mb-1">SearXNG URL</label>
+                <input
+                  type="text"
+                  value={enrichmentForm.searxng_url}
+                  onChange={(e) => setEnrichmentForm({ ...enrichmentForm, searxng_url: e.target.value })}
+                  placeholder="http://10.0.30.159:8093"
+                  className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:border-primary-500"
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  Base URL of a SearXNG instance with the <code className="bg-gray-800 px-1 rounded">json</code> format enabled.
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-sm text-gray-400 mb-1">AcoustID</label>
+                <p className="text-xs text-gray-500">
+                  Uses the AcoustID API key configured in the <strong>Audio Fingerprinting</strong> section above.
+                  Pulls canonical artist/title and release-group tags from audio fingerprints.
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-sm text-gray-400 mb-1">Discogs Token</label>
+                <input
+                  type="password"
+                  value={enrichmentForm.discogs_token}
+                  onChange={(e) => setEnrichmentForm({ ...enrichmentForm, discogs_token: e.target.value })}
+                  placeholder={enrichmentCfg?.discogs_token_set ? '••••••• (saved) — type to replace' : 'Personal access token'}
+                  className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:border-primary-500"
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  Free at{' '}
+                  <a href="https://www.discogs.com/settings/developers" target="_blank" rel="noopener noreferrer"
+                     className="text-primary-400 hover:underline">discogs.com/settings/developers</a>.
+                  Provides curated <code className="bg-gray-800 px-1 rounded">genre[]</code> + <code className="bg-gray-800 px-1 rounded">style[]</code> per release.
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-sm text-gray-400 mb-1">Spotify Client ID</label>
+                <input
+                  type="text"
+                  value={enrichmentForm.spotify_client_id}
+                  onChange={(e) => setEnrichmentForm({ ...enrichmentForm, spotify_client_id: e.target.value })}
+                  placeholder={enrichmentCfg?.spotify_client_id_set ? '••••••• (saved) — type to replace' : 'From developer.spotify.com app'}
+                  className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:border-primary-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm text-gray-400 mb-1">Spotify Client Secret</label>
+                <input
+                  type="password"
+                  value={enrichmentForm.spotify_client_secret}
+                  onChange={(e) => setEnrichmentForm({ ...enrichmentForm, spotify_client_secret: e.target.value })}
+                  placeholder={enrichmentCfg?.spotify_client_secret_set ? '••••••• (saved) — type to replace' : 'From developer.spotify.com app'}
+                  className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:border-primary-500"
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  Create a free app at{' '}
+                  <a href="https://developer.spotify.com/dashboard" target="_blank" rel="noopener noreferrer"
+                     className="text-primary-400 hover:underline">developer.spotify.com/dashboard</a>.
+                  Uses client-credentials flow (no user login). Gives curated <code className="bg-gray-800 px-1 rounded">genres[]</code> per artist.
+                </p>
+              </div>
+
+              <div className="flex flex-wrap gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => enrichmentSaveMutation.mutate(enrichmentForm)}
+                  disabled={enrichmentSaveMutation.isPending}
+                  className="px-4 py-2 bg-primary-600 hover:bg-primary-700 rounded-lg text-sm disabled:opacity-50"
+                >
+                  {enrichmentSaveMutation.isPending ? 'Saving...' : 'Save Enrichment Settings'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => enrichmentClearMutation.mutate()}
+                  disabled={enrichmentClearMutation.isPending}
+                  className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm disabled:opacity-50"
+                >
+                  {enrichmentClearMutation.isPending ? 'Clearing...' : 'Clear Enrichment Cache'}
+                </button>
+                {enrichmentSaveMutation.isSuccess && !enrichmentSaveMutation.isPending && (
+                  <span className="text-xs text-green-400 flex items-center gap-1">
+                    <CheckCircle2 className="w-4 h-4" /> Saved
+                  </span>
+                )}
+                {enrichmentClearMutation.isSuccess && (
+                  <span className="text-xs text-green-400">
+                    Cleared {enrichmentClearMutation.data?.rows_deleted ?? 0} cached entries
+                  </span>
+                )}
+              </div>
+
+              {/* Live test */}
+              <div className="bg-gray-700/40 rounded-lg p-3 mt-3">
+                <p className="text-sm text-gray-300 mb-2">Test enrichment for an artist/title:</p>
+                <div className="flex flex-wrap gap-2">
+                  <input
+                    type="text"
+                    placeholder="Artist"
+                    value={enrichmentTestQuery.artist}
+                    onChange={(e) => setEnrichmentTestQuery({ ...enrichmentTestQuery, artist: e.target.value })}
+                    className="flex-1 min-w-[180px] px-3 py-1.5 bg-gray-800 border border-gray-600 rounded text-sm"
+                  />
+                  <input
+                    type="text"
+                    placeholder="Title (optional)"
+                    value={enrichmentTestQuery.title}
+                    onChange={(e) => setEnrichmentTestQuery({ ...enrichmentTestQuery, title: e.target.value })}
+                    className="flex-1 min-w-[180px] px-3 py-1.5 bg-gray-800 border border-gray-600 rounded text-sm"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (enrichmentTestQuery.artist.trim()) {
+                        enrichmentTestMutation.mutate(enrichmentTestQuery)
+                      }
+                    }}
+                    disabled={enrichmentTestMutation.isPending || !enrichmentTestQuery.artist.trim()}
+                    className="px-3 py-1.5 bg-primary-600 hover:bg-primary-700 rounded text-sm disabled:opacity-50"
+                  >
+                    {enrichmentTestMutation.isPending ? 'Testing...' : 'Test'}
+                  </button>
+                </div>
+                {enrichmentTestResult && (
+                  <pre className="mt-2 text-xs bg-gray-900 border border-gray-700 rounded p-2 max-h-64 overflow-auto whitespace-pre-wrap text-gray-300">
+                    {enrichmentTestResult.error
+                      ? `Error: ${enrichmentTestResult.error}`
+                      : enrichmentTestResult.prompt_block || JSON.stringify(enrichmentTestResult, null, 2)}
+                  </pre>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Clear Database */}
+          <div className="border-t border-gray-700 pt-4 mt-4">
+            <p className="text-gray-400 text-sm mb-3">
+              Remove all tracks, matches, and scan data from the database. Your settings will be preserved.
+              Use this to start fresh if the database has stale or incorrect data.
+            </p>
+            
+            {!clearDbConfirm ? (
+              <ProgressButton
+                onClick={() => setClearDbConfirm(true)}
+                isLoading={false}
+                icon={<Trash2 className="w-4 h-4" />}
+                variant="danger"
+              >
+                Clear Database
+              </ProgressButton>
+            ) : (
+              <div className="flex items-center gap-3">
+                <span className="text-red-400 text-sm font-medium">Are you sure? This cannot be undone.</span>
+                <ProgressButton
+                  onClick={() => {
+                    setClearDbResult(null)
+                    clearDbMutation.mutate()
+                  }}
+                  isLoading={clearDbMutation.isPending}
+                  loadingText="Clearing..."
+                  icon={<Trash2 className="w-4 h-4" />}
+                  variant="danger"
+                >
+                  Yes, Clear Everything
+                </ProgressButton>
+                <button
+                  onClick={() => setClearDbConfirm(false)}
+                  className="px-3 py-2 text-sm text-gray-400 hover:text-white"
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
+          </div>
+          
+          {clearDbResult && (
+            <div className={`p-4 rounded-lg ${clearDbResult.error ? 'bg-red-900/50 border border-red-700' : 'bg-gray-700'}`}>
+              {clearDbResult.error ? (
+                <div className="flex items-center gap-2 text-red-400">
+                  <AlertTriangle className="w-5 h-5" />
+                  <span>{clearDbResult.error}</span>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2 text-green-400">
+                  <CheckCircle2 className="w-5 h-5" />
+                  <span>{clearDbResult.message}</span>
                 </div>
               )}
             </div>

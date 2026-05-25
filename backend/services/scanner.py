@@ -17,7 +17,8 @@ from backend.models.track import Track
 from backend.config import settings
 from loguru import logger
 
-# Scan state
+# Scan state with lock for thread safety
+_scan_lock = asyncio.Lock()
 _scan_status = {
     "running": False,
     "progress": 0,
@@ -32,29 +33,24 @@ _scan_status = {
 _scan_stop_flag = False
 
 
-def get_min_duration_setting() -> int:
+async def get_min_duration_setting() -> int:
     """Get minimum duration setting from saved settings"""
-    settings_file = os.path.join(settings.config_dir, "settings.json")
-    if os.path.exists(settings_file):
-        with open(settings_file, "r") as f:
-            saved = json.load(f)
-            return saved.get("min_duration_minutes", 0)
-    return 0
+    from backend.services.database import load_saved_settings_db
+    saved = await load_saved_settings_db()
+    return saved.get("min_duration_minutes", 0)
 
 
-def get_music_dirs() -> List[str]:
+async def get_music_dirs() -> List[str]:
     """Get list of music directories from saved settings"""
-    settings_file = os.path.join(settings.config_dir, "settings.json")
-    if os.path.exists(settings_file):
-        with open(settings_file, "r") as f:
-            saved = json.load(f)
-            music_dirs = saved.get("music_dirs", [])
-            if music_dirs:
-                return [d for d in music_dirs if d and os.path.exists(d)]
-            # Fallback to single music_dir
-            music_dir = saved.get("music_dir", settings.music_dir)
-            if music_dir and os.path.exists(music_dir):
-                return [music_dir]
+    from backend.services.database import load_saved_settings_db
+    saved = await load_saved_settings_db()
+    music_dirs = saved.get("music_dirs", [])
+    if music_dirs:
+        return [d for d in music_dirs if d and os.path.exists(d)]
+    # Fallback to single music_dir
+    music_dir = saved.get("music_dir", settings.music_dir)
+    if music_dir and os.path.exists(music_dir):
+        return [music_dir]
     # Default
     if os.path.exists(settings.music_dir):
         return [settings.music_dir]
@@ -63,13 +59,15 @@ def get_music_dirs() -> List[str]:
 
 async def get_scan_status():
     """Get current scan status"""
-    return _scan_status.copy()
+    async with _scan_lock:
+        return _scan_status.copy()
 
 
 async def stop_current_scan():
     """Signal scan to stop"""
     global _scan_stop_flag
-    _scan_stop_flag = True
+    async with _scan_lock:
+        _scan_stop_flag = True
 
 
 def get_audio_extensions():
@@ -134,8 +132,8 @@ def extract_metadata_from_file(filepath: str) -> dict:
                         grouping = str(raw_audio['TIT1'])
                         if series_marker in grouping:
                             metadata["series_tagged"] = True
-                except:
-                    pass
+                except Exception as e:
+                    logger.debug(f"ID3 series-tag read failed for {filepath}: {e}")
             elif ext == '.flac':
                 from mutagen.flac import FLAC
                 raw_audio = FLAC(filepath)
@@ -223,7 +221,7 @@ async def scan_directory(directory: str = None):
     if directory:
         directories = [directory]
     else:
-        directories = get_music_dirs()
+        directories = await get_music_dirs()
     
     if not directories:
         logger.error("No valid music directories configured")
@@ -237,24 +235,26 @@ async def scan_directory(directory: str = None):
     logger.info(f"Scanning directories: {directories}")
     logger.info(f"Looking for extensions: {extensions}")
     
-    # First pass: find all audio files from all directories
+    # First pass: find all audio files from all directories (run blocking I/O in thread)
     try:
-        for scan_dir in directories:
-            if _scan_stop_flag:
-                break
-            
-            if not os.path.exists(scan_dir):
-                logger.warning(f"Directory does not exist, skipping: {scan_dir}")
-                continue
-                
-            logger.info(f"Scanning: {scan_dir}")
-            for root, dirs, files in os.walk(scan_dir):
+        def _discover_files():
+            files = []
+            for scan_dir in directories:
                 if _scan_stop_flag:
                     break
-                    
-                for file in files:
-                    if any(file.lower().endswith(ext) for ext in extensions):
-                        audio_files.append(os.path.join(root, file))
+                if not os.path.exists(scan_dir):
+                    logger.warning(f"Directory does not exist, skipping: {scan_dir}")
+                    continue
+                logger.info(f"Scanning: {scan_dir}")
+                for root, dirs, filenames in os.walk(scan_dir):
+                    if _scan_stop_flag:
+                        break
+                    for file in filenames:
+                        if any(file.lower().endswith(ext) for ext in extensions):
+                            files.append(os.path.join(root, file))
+            return files
+        
+        audio_files = await asyncio.to_thread(_discover_files)
         
         _scan_status["total"] = len(audio_files)
         _scan_status["files_found"] = len(audio_files)
@@ -267,79 +267,93 @@ async def scan_directory(directory: str = None):
         return
     
     # Second pass: process files and add to database
-    async with get_db() as db:
-        for i, filepath in enumerate(audio_files):
-            if _scan_stop_flag:
-                logger.info("Scan stopped by user")
-                break
-            
-            _scan_status["progress"] = i + 1
-            _scan_status["current_file"] = os.path.basename(filepath)
-            
-            try:
-                # Check if already in database
-                existing = await db.execute(
-                    select(Track).where(Track.filepath == filepath)
-                )
-                if existing.scalar_one_or_none():
-                    _scan_status["files_skipped"] += 1
-                    continue
+    try:
+        async with get_db() as db:
+            for i, filepath in enumerate(audio_files):
+                if _scan_stop_flag:
+                    logger.info("Scan stopped by user")
+                    break
                 
-                # Extract metadata
-                metadata = extract_metadata_from_file(filepath)
-                filename_meta = parse_filename_for_metadata(os.path.basename(filepath))
+                _scan_status["progress"] = i + 1
+                _scan_status["current_file"] = os.path.basename(filepath)
                 
-                # Prefer file metadata, fall back to filename parsing
-                title = metadata["title"] or filename_meta["title"]
-                artist = metadata["artist"] or filename_meta["artist"]
-                
-                # Check minimum duration filter
-                min_duration = get_min_duration_setting()
-                if min_duration > 0 and metadata["duration"]:
-                    min_seconds = min_duration * 60
-                    if metadata["duration"] < min_seconds:
-                        _scan_status["files_filtered"] += 1
-                        logger.debug(f"Skipping {filepath}: duration {metadata['duration']}s < {min_seconds}s minimum")
+                try:
+                    # Check if already in database
+                    existing = await db.execute(
+                        select(Track).where(Track.filepath == filepath)
+                    )
+                    if existing.scalar_one_or_none():
+                        _scan_status["files_skipped"] += 1
                         continue
-                
-                # Get file size
-                file_size = os.path.getsize(filepath)
-                
-                # Create track record
-                track = Track(
-                    filepath=filepath,
-                    filename=os.path.basename(filepath),
-                    directory=os.path.dirname(filepath),
-                    title=title,
-                    artist=artist,
-                    album=metadata["album"],
-                    genre=metadata["genre"],
-                    year=metadata["year"],
-                    duration=metadata["duration"],
-                    file_size=file_size,
-                    file_format=metadata["file_format"],
-                    bitrate=metadata["bitrate"],
-                    sample_rate=metadata["sample_rate"],
-                    status="pending",
-                    series_tagged=metadata.get("series_tagged", False)  # Restore from file metadata
-                )
-                
-                db.add(track)
-                _scan_status["files_added"] += 1
-                
-                # Commit in batches of 100
-                if _scan_status["files_added"] % 100 == 0:
-                    await db.commit()
-                    logger.info(f"Processed {i + 1}/{len(audio_files)} files")
-                
-            except Exception as e:
-                logger.error(f"Error processing {filepath}: {e}")
-                _scan_status["errors"].append(f"{filepath}: {str(e)}")
-        
-        # Final commit
-        await db.commit()
-    
-    _scan_status["running"] = False
-    _scan_status["current_file"] = None
+                    
+                    # Extract metadata (blocking I/O — run in thread)
+                    metadata = await asyncio.to_thread(extract_metadata_from_file, filepath)
+                    filename_meta = parse_filename_for_metadata(os.path.basename(filepath))
+                    
+                    # Prefer file metadata, fall back to filename parsing
+                    title = metadata["title"] or filename_meta["title"]
+                    artist = metadata["artist"] or filename_meta["artist"]
+                    
+                    # Check minimum duration filter
+                    min_duration = await get_min_duration_setting()
+                    if min_duration > 0 and metadata["duration"]:
+                        min_seconds = min_duration * 60
+                        if metadata["duration"] < min_seconds:
+                            _scan_status["files_filtered"] += 1
+                            logger.debug(f"Skipping {filepath}: duration {metadata['duration']}s < {min_seconds}s minimum")
+                            continue
+                    
+                    # Get file size
+                    file_size = os.path.getsize(filepath)
+                    
+                    # Create track record
+                    track = Track(
+                        filepath=filepath,
+                        filename=os.path.basename(filepath),
+                        directory=os.path.dirname(filepath),
+                        title=title,
+                        artist=artist,
+                        album=metadata["album"],
+                        genre=metadata["genre"],
+                        year=metadata["year"],
+                        duration=metadata["duration"],
+                        file_size=file_size,
+                        file_format=metadata["file_format"],
+                        bitrate=metadata["bitrate"],
+                        sample_rate=metadata["sample_rate"],
+                        status="pending",
+                        series_tagged=metadata.get("series_tagged", False)  # Restore from file metadata
+                    )
+                    
+                    # Read Mixed In Key tags and cache in DB
+                    try:
+                        from backend.services.mik import read_mik_tags
+                        mik = await asyncio.to_thread(read_mik_tags, filepath)
+                        track.mik_bpm = mik.get("bpm")
+                        track.mik_key = mik.get("key")
+                        track.mik_energy = mik.get("energy")
+                    except Exception as mik_err:
+                        logger.debug(f"Could not read MIK tags for {filepath}: {mik_err}")
+                    
+                    db.add(track)
+                    _scan_status["files_added"] += 1
+                    
+                    # Commit in batches of 100
+                    if _scan_status["files_added"] % 100 == 0:
+                        await db.commit()
+                        logger.info(f"Processed {i + 1}/{len(audio_files)} files")
+                    
+                except Exception as e:
+                    logger.error(f"Error processing {filepath}: {e}")
+                    _scan_status["errors"].append(f"{filepath}: {str(e)}")
+            
+            # Final commit
+            await db.commit()
+    except Exception as e:
+        logger.exception(f"Scan loop crashed: {e}")
+        _scan_status["errors"].append(f"Scan loop crashed: {e}")
+    finally:
+        _scan_status["running"] = False
+        _scan_status["current_file"] = None
     
     logger.info(f"Scan complete. Added: {_scan_status['files_added']}, Skipped: {_scan_status['files_skipped']}, Filtered: {_scan_status['files_filtered']}")

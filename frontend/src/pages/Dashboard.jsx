@@ -1,14 +1,17 @@
-import { useQuery } from '@tanstack/react-query'
-import { Link } from 'react-router-dom'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { Link, useNavigate } from 'react-router-dom'
 import { 
   Music, 
   CheckCircle2, 
   Clock, 
   AlertCircle, 
   Search,
-  Tag
+  Tag,
+  Loader2,
+  Wand2,
+  Image
 } from 'lucide-react'
-import { getTrackStats, getTracks } from '../api'
+import { getTrackStats, getTracks, batchMatch, batchApplyTags, autoMatchFromMetadata, batchCoverArt } from '../api'
 
 function StatCard({ icon: Icon, label, value, color, to }) {
   const content = (
@@ -59,16 +62,57 @@ function RecentTrackRow({ track }) {
 }
 
 function Dashboard() {
+  const queryClient = useQueryClient()
+  const navigate = useNavigate()
+
   const { data: stats, isLoading: statsLoading } = useQuery({
     queryKey: ['track-stats'],
     queryFn: getTrackStats,
     refetchInterval: 5000,
   })
 
-  const { data: recentTracks, isLoading: tracksLoading } = useQuery({
+  const { data: recentTracksRaw, isLoading: tracksLoading } = useQuery({
     queryKey: ['recent-tracks'],
     queryFn: () => getTracks({ limit: 5 }),
     refetchInterval: 10000,
+  })
+
+  // API returns a plain array; guard against unexpected shapes
+  const recentTracks = Array.isArray(recentTracksRaw)
+    ? recentTracksRaw
+    : Array.isArray(recentTracksRaw?.tracks)
+      ? recentTracksRaw.tracks
+      : []
+
+  const matchAllMutation = useMutation({
+    mutationFn: () => batchMatch(null, 'pending'),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['track-stats'] })
+      navigate('/tracks?status=pending')
+    },
+  })
+
+  const tagAllMutation = useMutation({
+    mutationFn: () => batchApplyTags(null, true),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['track-stats'] })
+      navigate('/tracks?status=tagged')
+    },
+  })
+
+  const autoMatchMutation = useMutation({
+    mutationFn: autoMatchFromMetadata,
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['track-stats'] })
+      queryClient.invalidateQueries({ queryKey: ['tracks'] })
+    },
+  })
+
+  const coverArtMutation = useMutation({
+    mutationFn: batchCoverArt,
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['tracks'] })
+    },
   })
 
   return (
@@ -129,20 +173,64 @@ function Dashboard() {
             Scan Library
           </Link>
           <button 
-            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors flex items-center gap-2"
-            onClick={() => {/* TODO: batch match */}}
+            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors flex items-center gap-2 disabled:opacity-50"
+            onClick={() => matchAllMutation.mutate()}
+            disabled={matchAllMutation.isPending || !stats?.pending}
           >
-            <Search className="w-4 h-4" />
-            Match All Pending
+            {matchAllMutation.isPending ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <Search className="w-4 h-4" />
+            )}
+            {matchAllMutation.isPending ? 'Matching...' : 'Match All Pending'}
           </button>
           <button 
-            className="px-4 py-2 bg-green-600 hover:bg-green-700 rounded-lg transition-colors flex items-center gap-2"
-            onClick={() => {/* TODO: batch tag */}}
+            className="px-4 py-2 bg-green-600 hover:bg-green-700 rounded-lg transition-colors flex items-center gap-2 disabled:opacity-50"
+            onClick={() => tagAllMutation.mutate()}
+            disabled={tagAllMutation.isPending || !stats?.matched}
           >
-            <Tag className="w-4 h-4" />
-            Tag All Matched
+            {tagAllMutation.isPending ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <Tag className="w-4 h-4" />
+            )}
+            {tagAllMutation.isPending ? 'Tagging...' : 'Tag All Matched'}
+          </button>
+          <button 
+            className="px-4 py-2 bg-purple-600 hover:bg-purple-700 rounded-lg transition-colors flex items-center gap-2 disabled:opacity-50"
+            onClick={() => autoMatchMutation.mutate()}
+            disabled={autoMatchMutation.isPending || !stats?.pending}
+          >
+            {autoMatchMutation.isPending ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <Wand2 className="w-4 h-4" />
+            )}
+            {autoMatchMutation.isPending ? 'Auto-matching...' : 'Auto-Match from Filenames'}
+          </button>
+          <button 
+            className="px-4 py-2 bg-pink-600 hover:bg-pink-700 rounded-lg transition-colors flex items-center gap-2 disabled:opacity-50"
+            onClick={() => coverArtMutation.mutate()}
+            disabled={coverArtMutation.isPending || !stats?.matched}
+          >
+            {coverArtMutation.isPending ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <Image className="w-4 h-4" />
+            )}
+            {coverArtMutation.isPending ? 'Searching...' : 'Find Cover Art'}
           </button>
         </div>
+        {autoMatchMutation.isSuccess && (
+          <p className="text-sm text-green-400 mt-3">
+            {autoMatchMutation.data?.message}
+          </p>
+        )}
+        {coverArtMutation.isSuccess && (
+          <p className="text-sm text-green-400 mt-3">
+            {coverArtMutation.data?.message}
+          </p>
+        )}
       </div>
 
       {/* Recent Tracks */}

@@ -35,6 +35,7 @@ import {
 } from '../api'
 import ProgressButton from '../components/ProgressButton'
 import AudioPlayer from '../components/AudioPlayer'
+import TrackCover from '../components/TrackCover'
 
 function formatDuration(seconds) {
   if (!seconds) return '--:--'
@@ -126,6 +127,7 @@ function TrackDetail() {
   const [coverOptions, setCoverOptions] = useState([])
   const [isLoadingCovers, setIsLoadingCovers] = useState(false)
   const [isSearching, setIsSearching] = useState(false)
+  const [searchTimedOut, setSearchTimedOut] = useState(false)
   const initialMatchCount = useRef(0)
 
   const { data: track, isLoading } = useQuery({
@@ -155,6 +157,7 @@ function TrackDetail() {
       // Capture current match count before search starts
       initialMatchCount.current = matches?.length ?? 0
       setIsSearching(true)
+      setSearchTimedOut(false)
     },
     onSuccess: () => {
       queryClient.invalidateQueries(['track', id])
@@ -169,16 +172,14 @@ function TrackDetail() {
     if (!isSearching) return
     
     let pollCount = 0
-    const maxPolls = 30 // 30 polls * 2 seconds = 60 seconds max
+    const maxPolls = 45 // 45 polls * 2 seconds = 90 seconds max
     const startCount = initialMatchCount.current
     
     const interval = setInterval(async () => {
       pollCount++
       
-      // Force invalidate to trigger re-render
       await queryClient.invalidateQueries(['matches', id])
       
-      // Fetch fresh data directly
       const freshMatches = await queryClient.fetchQuery({
         queryKey: ['matches', id],
         queryFn: () => getMatchResults(id),
@@ -186,11 +187,12 @@ function TrackDetail() {
       
       const currentCount = freshMatches?.length ?? 0
       
-      console.log(`Poll ${pollCount}: startCount=${startCount}, currentCount=${currentCount}`)
-      
-      // Stop if we got new results or reached max polls
-      if (currentCount > startCount || pollCount >= maxPolls) {
+      if (currentCount > startCount) {
         setIsSearching(false)
+        clearInterval(interval)
+      } else if (pollCount >= maxPolls) {
+        setIsSearching(false)
+        setSearchTimedOut(true)
         clearInterval(interval)
       }
     }, 2000)
@@ -456,7 +458,14 @@ function TrackDetail() {
                   <input
                     type="text"
                     value={editForm.year}
-                    onChange={(e) => setEditForm({ ...editForm, year: e.target.value })}
+                    onChange={(e) => {
+                      const val = e.target.value
+                      if (val === '' || /^\d{0,4}$/.test(val)) {
+                        setEditForm({ ...editForm, year: val })
+                      }
+                    }}
+                    placeholder="e.g. 2024"
+                    maxLength={4}
                     className="w-full mt-1 px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:border-primary-500"
                   />
                 ) : (
@@ -603,6 +612,17 @@ function TrackDetail() {
                   />
                 ))}
               </div>
+            ) : isSearching ? (
+              <div className="text-center py-8">
+                <div className="w-6 h-6 border-2 border-primary-500 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
+                <p className="text-gray-400">Searching for matches...</p>
+                <p className="text-gray-500 text-sm mt-1">This may take up to 90 seconds</p>
+              </div>
+            ) : searchTimedOut ? (
+              <div className="text-center py-8">
+                <p className="text-yellow-400 mb-2">Search timed out without finding matches.</p>
+                <p className="text-gray-400 text-sm">Try editing the title/artist and searching again.</p>
+              </div>
             ) : (
               <p className="text-gray-400 text-center py-8">
                 No matches found. Try searching again or edit the metadata manually.
@@ -631,18 +651,8 @@ function TrackDetail() {
                 Browse
               </button>
             </div>
-            <div className="aspect-square bg-gray-700 rounded-lg overflow-hidden">
-              {track.matched_cover_url ? (
-                <img 
-                  src={track.matched_cover_url} 
-                  alt="Cover" 
-                  className="w-full h-full object-cover"
-                />
-              ) : (
-                <div className="w-full h-full flex items-center justify-center">
-                  <Music className="w-16 h-16 text-gray-500" />
-                </div>
-              )}
+            <div className="aspect-square bg-gray-700 rounded-lg overflow-hidden flex items-center justify-center">
+              <TrackCover trackId={track.id} matchedUrl={track.matched_cover_url} alt="Cover" iconClassName="w-16 h-16 text-gray-500" />
             </div>
             {track.matched_cover_url && (
               <p className="text-xs text-gray-500 mt-2 truncate" title={track.matched_cover_url}>

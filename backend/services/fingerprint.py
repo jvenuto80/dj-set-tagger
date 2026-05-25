@@ -5,6 +5,8 @@ Uses Chromaprint for fingerprint generation and AcoustID for identification.
 
 import asyncio
 import hashlib
+import os
+import shutil
 import subprocess
 from typing import Optional
 from loguru import logger
@@ -17,6 +19,49 @@ except ImportError:
     logger.warning("pyacoustid not installed - AcoustID features disabled")
 
 
+# ---------------------------------------------------------------------------
+# fpcalc binary resolution
+# ---------------------------------------------------------------------------
+# GUI apps launched from Finder (e.g. Tauri bundles) inherit a restricted PATH
+# that does NOT include /opt/homebrew/bin or /usr/local/bin, so a bare
+# `fpcalc` lookup via subprocess will fail with FileNotFoundError even when
+# the binary is installed via Homebrew. Resolve the absolute path once.
+_FPCALC_SEARCH_PATHS = [
+    "/opt/homebrew/bin/fpcalc",      # Apple Silicon Homebrew
+    "/usr/local/bin/fpcalc",         # Intel Homebrew / manual installs
+    "/opt/local/bin/fpcalc",         # MacPorts
+    "/usr/bin/fpcalc",               # system / Linux packages
+    "/snap/bin/fpcalc",              # Linux snap
+]
+
+
+def _resolve_fpcalc() -> Optional[str]:
+    """Find the absolute path to fpcalc, checking PATH and common install locations."""
+    # 1. Explicit override
+    env_path = os.environ.get("FPCALC_PATH")
+    if env_path and os.path.isfile(env_path) and os.access(env_path, os.X_OK):
+        return env_path
+    # 2. PATH lookup (works when launched from a shell)
+    found = shutil.which("fpcalc")
+    if found:
+        return found
+    # 3. Known install locations (for GUI-launched bundled apps)
+    for candidate in _FPCALC_SEARCH_PATHS:
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    return None
+
+
+FPCALC_BIN: Optional[str] = _resolve_fpcalc()
+if FPCALC_BIN:
+    logger.info(f"fpcalc resolved to: {FPCALC_BIN}")
+else:
+    logger.warning(
+        "fpcalc (Chromaprint) not found in PATH or common locations. "
+        "Install with `brew install chromaprint` or set FPCALC_PATH env var."
+    )
+
+
 async def generate_fingerprint(file_path: str) -> Optional[tuple[int, str]]:
     """
     Generate audio fingerprint using fpcalc (Chromaprint).
@@ -24,13 +69,16 @@ async def generate_fingerprint(file_path: str) -> Optional[tuple[int, str]]:
     Returns:
         Tuple of (duration_seconds, fingerprint_string) or None if failed
     """
+    if not FPCALC_BIN:
+        logger.error("fpcalc binary not available; cannot generate fingerprint")
+        return None
     try:
         # Run fpcalc in a thread pool to avoid blocking
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(
             None,
             lambda: subprocess.run(
-                ['fpcalc', '-json', file_path],
+                [FPCALC_BIN, '-json', file_path],
                 capture_output=True,
                 text=True,
                 timeout=60
@@ -150,62 +198,94 @@ async def identify_with_acoustid_extended(
 ) -> Optional[dict]:
     """
     Identify a track using AcoustID API with extended metadata from MusicBrainz.
-    
+
     Returns more detailed info including album, year, etc.
+
+    Raises:
+        RuntimeError: with a user-actionable message when fingerprinting or the
+            AcoustID API call fails for a reason the user can fix (missing
+            fpcalc binary, missing pyacoustid module, network/API errors).
     """
     if not ACOUSTID_AVAILABLE:
-        return None
-    
+        raise RuntimeError(
+            "pyacoustid Python module is not installed. "
+            "Reinstall the backend dependencies (pip install -r requirements.txt)."
+        )
+
     if not api_key:
-        return None
-    
+        raise RuntimeError("AcoustID API key is empty.")
+
+    if not FPCALC_BIN:
+        raise RuntimeError(
+            "fpcalc (Chromaprint) binary not found. Install it with "
+            "`brew install chromaprint` (macOS) or set the FPCALC_PATH env var."
+        )
+
+    if not os.path.exists(file_path):
+        raise RuntimeError(f"Audio file not found on disk: {file_path}")
+
+    # Generate fingerprint using our resolved absolute fpcalc path (works inside
+    # Tauri sidecars where PATH does not include /opt/homebrew/bin)
+    fp = await generate_fingerprint(file_path)
+    if not fp:
+        raise RuntimeError(
+            "Failed to generate audio fingerprint. Check the backend log for "
+            "the fpcalc error (the file may be unreadable or in an unsupported format)."
+        )
+    duration, fingerprint = fp
+
     try:
         loop = asyncio.get_event_loop()
-        
-        # Use acoustid.match with releases meta for album info
+
         def do_lookup():
-            try:
-                # Get raw API response for more control
-                duration, fingerprint = acoustid.fingerprint_file(file_path)
-                response = acoustid.lookup(
-                    api_key,
-                    fingerprint,
-                    duration,
-                    meta='recordings releases releasegroups'
-                )
-                return response
-            except Exception as e:
-                logger.error(f"AcoustID lookup error: {e}")
-                return None
-        
-        response = await loop.run_in_executor(None, do_lookup)
-        
+            return acoustid.lookup(
+                api_key,
+                fingerprint,
+                duration,
+                meta='recordings releases releasegroups'
+            )
+
+        try:
+            response = await loop.run_in_executor(None, do_lookup)
+        except Exception as e:
+            # Network error, invalid API key, AcoustID 5xx, etc.
+            logger.error(f"AcoustID lookup error: {e}")
+            raise RuntimeError(f"AcoustID API request failed: {e}")
+
         if not response or 'results' not in response:
-            logger.info(f"No AcoustID response for {file_path}")
+            logger.warning(f"No AcoustID 'results' key for {file_path}. Raw response: {response!r}")
+            status = (response or {}).get('status')
+            err = (response or {}).get('error') or {}
+            if status and status != 'ok':
+                raise RuntimeError(
+                    f"AcoustID returned status={status!r} "
+                    f"({err.get('message') or err or 'no message'}). "
+                    f"Check your API key in Settings."
+                )
             return None
-        
+
         results = response['results']
         if not results:
-            logger.info(f"Empty AcoustID results for {file_path}")
+            logger.warning(f"AcoustID returned 0 results for {file_path}. Raw response: {response!r}")
             return None
-        
+
         # Log all results for debugging
         logger.info(f"AcoustID returned {len(results)} results for {file_path}")
-        
+
         # Find best match with recordings
         for result in sorted(results, key=lambda x: x.get('score', 0), reverse=True):
             score = result.get('score', 0)
             logger.info(f"  Result score: {score:.2f}")
-            
+
             if score < 0.5:
                 logger.info(f"  Skipping low score result")
                 continue
-                
+
             recordings = result.get('recordings', [])
             if not recordings:
                 logger.info(f"  No recordings in this result")
                 continue
-            
+
             # Log all recordings for this result
             logger.info(f"  Found {len(recordings)} recordings:")
             for i, rec in enumerate(recordings[:5]):  # Log first 5
@@ -213,25 +293,25 @@ async def identify_with_acoustid_extended(
                 rec_artist = rec_artists[0]['name'] if rec_artists else 'Unknown'
                 rec_title = rec.get('title', 'Unknown')
                 logger.info(f"    {i+1}. {rec_artist} - {rec_title}")
-            
+
             # Return ALL recordings so user can pick the right one
             all_recordings = []
             for rec in recordings:
                 rec_artists = rec.get('artists', [])
                 artist_name = rec_artists[0]['name'] if rec_artists else None
-                
+
                 # Try to get album info from releases
                 releases = rec.get('releases', [])
                 album_name = None
                 year = None
-                
+
                 if releases:
                     release = releases[0]
                     album_name = release.get('title')
                     date = release.get('date', {})
                     if date:
                         year = str(date.get('year', ''))
-                
+
                 all_recordings.append({
                     'title': rec.get('title'),
                     'artist': artist_name,
@@ -239,20 +319,22 @@ async def identify_with_acoustid_extended(
                     'year': year,
                     'musicbrainz_recording_id': rec.get('id'),
                 })
-            
+
             # Return best guess as primary, but include alternatives
             primary = all_recordings[0] if all_recordings else None
             if primary:
                 primary['score'] = score
                 primary['alternatives'] = all_recordings[1:10] if len(all_recordings) > 1 else []
-            
+
             return primary
-        
+
         return None
-        
+
+    except RuntimeError:
+        raise
     except Exception as e:
         logger.error(f"Error in extended AcoustID lookup: {e}")
-        return None
+        raise RuntimeError(f"Unexpected error during AcoustID lookup: {e}")
 
 
 async def find_duplicates_by_fingerprint(
@@ -292,9 +374,11 @@ async def find_duplicates_by_fingerprint(
 
 async def check_fpcalc_available() -> bool:
     """Check if fpcalc (Chromaprint) is available."""
+    if not FPCALC_BIN:
+        return False
     try:
         result = subprocess.run(
-            ['fpcalc', '-version'],
+            [FPCALC_BIN, '-version'],
             capture_output=True,
             text=True,
             timeout=5

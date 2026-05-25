@@ -9,9 +9,9 @@ import os
 class Settings(BaseSettings):
     """Application settings loaded from environment variables"""
     
-    # Directory settings
-    music_dir: str = os.environ.get("MUSIC_DIR", "/music")
-    config_dir: str = os.environ.get("CONFIG_DIR", "/config")
+    # Directory settings (defaults to native paths under the user's home dir)
+    music_dir: str = os.environ.get("MUSIC_DIR", os.path.expanduser("~/Music"))
+    config_dir: str = os.environ.get("CONFIG_DIR", os.path.expanduser("~/.setlist"))
     
     # Scan settings
     scan_extensions: List[str] = ["mp3", "flac", "wav", "m4a", "aac", "ogg"]

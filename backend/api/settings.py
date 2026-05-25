@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import List
 from backend.config import settings
-import json
+from backend.services.database import load_saved_settings_db, save_settings_db
 import os
 from loguru import logger
 
@@ -34,33 +34,21 @@ class SettingsUpdate(BaseModel):
     acoustid_api_key: str | None = None
 
 
-def get_settings_file():
-    """Get path to settings file"""
-    return os.path.join(settings.config_dir, "settings.json")
+async def load_saved_settings() -> dict:
+    """Load saved settings from database"""
+    return await load_saved_settings_db()
 
 
-def load_saved_settings() -> dict:
-    """Load saved settings from file"""
-    settings_file = get_settings_file()
-    if os.path.exists(settings_file):
-        with open(settings_file, "r") as f:
-            return json.load(f)
-    return {}
-
-
-def save_settings(data: dict):
-    """Save settings to file"""
-    settings_file = get_settings_file()
-    os.makedirs(os.path.dirname(settings_file), exist_ok=True)
-    with open(settings_file, "w") as f:
-        json.dump(data, f, indent=2)
+async def save_settings(data: dict):
+    """Save settings to database"""
+    await save_settings_db(data)
 
 
 @router.get("", response_model=AppSettings)
 @router.get("/", response_model=AppSettings)
 async def get_settings():
     """Get current application settings"""
-    saved = load_saved_settings()
+    saved = await load_saved_settings()
     
     # Handle music_dirs - migrate from music_dir if needed
     music_dirs = saved.get("music_dirs", [])
@@ -84,7 +72,7 @@ async def get_settings():
 @router.patch("/", response_model=AppSettings)
 async def update_settings(update: SettingsUpdate):
     """Update application settings"""
-    current = load_saved_settings()
+    current = await load_saved_settings()
     
     update_data = update.model_dump(exclude_unset=True)
     
@@ -110,35 +98,105 @@ async def update_settings(update: SettingsUpdate):
         update_data["music_dirs"] = current_dirs
     
     current.update(update_data)
-    save_settings(current)
+    await save_settings(current)
     logger.info(f"Settings updated: {update_data}")
     
     return await get_settings()
 
 
+@router.delete("/database")
+async def clear_database():
+    """Clear all track data from the database (keeps settings)"""
+    from backend.services.database import clear_all_tracks
+    try:
+        await clear_all_tracks()
+        return {"status": "ok", "message": "All track data cleared"}
+    except Exception as e:
+        logger.error(f"Failed to clear database: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/directories")
 async def list_directories(path: str = "/"):
-    """List directories for browsing"""
-    try:
+    """List directories for browsing (native filesystem)."""
+    import asyncio
+
+    # Resolve symlinks to defeat traversal via symlink trickery, then normalize.
+    clean = os.path.realpath(os.path.normpath(path))
+
+    if not os.path.isdir(clean):
+        raise HTTPException(status_code=404, detail="Directory not found")
+
+    def _scan_dir():
         entries = []
-        for entry in os.scandir(path):
+        for entry in os.scandir(clean):
             if entry.is_dir() and not entry.name.startswith("."):
                 entries.append({
                     "name": entry.name,
-                    "path": entry.path
+                    "path": os.path.join(clean, entry.name)
                 })
-        
         entries.sort(key=lambda x: x["name"].lower())
-        
+        return entries
+
+    try:
+        # Run in thread with timeout to handle slow/hung FUSE mounts
+        entries = await asyncio.wait_for(
+            asyncio.to_thread(_scan_dir),
+            timeout=5.0
+        )
+
         return {
-            "current": path,
-            "parent": os.path.dirname(path) if path != "/" else None,
+            "current": clean,
+            "parent": os.path.dirname(clean) if clean != "/" else None,
             "directories": entries
         }
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=408, detail="Directory listing timed out — this path may be on a slow or unreachable mount")
     except PermissionError:
         raise HTTPException(status_code=403, detail="Permission denied")
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Directory not found")
+
+
+@router.get("/mounts")
+async def get_available_mounts():
+    """Suggest likely music locations on the user's machine."""
+    mounts = []
+
+    home = os.path.expanduser("~")
+    candidates = [
+        os.path.join(home, "Music"),
+        os.path.join(home, "Downloads"),
+        os.path.join(home, "Desktop"),
+        "/Volumes",   # macOS external drives
+        "/mnt",       # Linux mount points
+        "/media",     # Linux removable media
+    ]
+    seen = set()
+    for path in candidates:
+        if path in seen or not os.path.isdir(path):
+            continue
+        seen.add(path)
+        try:
+            subdirs = [e.name for e in os.scandir(path) if e.is_dir() and not e.name.startswith(".")]
+            files = [e.name for e in os.scandir(path) if e.is_file()]
+            mounts.append({
+                "path": path,
+                "name": os.path.basename(path) or path,
+                "subdirs": len(subdirs),
+                "files": len(files),
+                "type": "mount"
+            })
+        except PermissionError:
+            continue
+
+    return {"mounts": mounts}
+
+
+@router.get("/volume-info")
+async def get_volume_info():
+    """Native app: volume information is OS-specific and not exposed here."""
+    return {"volumes": []}
 
 
 @router.get("/logs")

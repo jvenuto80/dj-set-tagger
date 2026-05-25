@@ -947,15 +947,17 @@ function Series() {
     }
   }, [backgroundJob])
 
-  const { data: series, isLoading, error } = useQuery({
+  const { data: seriesRaw, isLoading, error } = useQuery({
     queryKey: ['series'],
     queryFn: () => detectSeries(false),
   })
+  const series = Array.isArray(seriesRaw) ? seriesRaw : []
 
-  const { data: taggedSeries, isLoading: isLoadingTagged } = useQuery({
+  const { data: taggedSeriesRaw, isLoading: isLoadingTagged } = useQuery({
     queryKey: ['taggedSeries'],
     queryFn: getTaggedSeries,
   })
+  const taggedSeries = Array.isArray(taggedSeriesRaw) ? taggedSeriesRaw : []
 
   const applyMutation = useMutation({
     mutationFn: ({ trackIds, album, artist, genre, albumArtist, coverUrl }) => applySeriesAlbum(trackIds, album, artist, genre, albumArtist, coverUrl),
@@ -1075,8 +1077,8 @@ function Series() {
   }, [taggedSeries, searchQuery])
 
   // Calculate totals
-  const totalTracks = series?.reduce((sum, s) => sum + s.track_count, 0) || 0
-  const totalTaggedTracks = taggedSeries?.reduce((sum, s) => sum + s.track_count, 0) || 0
+  const totalTracks = Array.isArray(series) ? series.reduce((sum, s) => sum + s.track_count, 0) : 0
+  const totalTaggedTracks = Array.isArray(taggedSeries) ? taggedSeries.reduce((sum, s) => sum + s.track_count, 0) : 0
 
   if (isLoading && isLoadingTagged) {
     return (

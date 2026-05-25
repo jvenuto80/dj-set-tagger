@@ -16,8 +16,9 @@ import {
   Play,
   Pause
 } from 'lucide-react'
-import { getTracks, deleteTrack, batchMatch, batchApplyTags, getTrackFilters, getTrackStats } from '../api'
+import { getTracks, deleteTrack, batchMatch, batchApplyTags, getTrackFilters, getTrackStats, convertToMp3 } from '../api'
 import { MiniPlayer } from '../components/AudioPlayer'
+import TrackCover from '../components/TrackCover'
 
 const statusFilters = [
   { value: '', label: 'All Tracks' },
@@ -44,12 +45,12 @@ const pageSizeOptions = [
 
 function TrackRow({ track, selected, onSelect }) {
   return (
-    <div className={`flex items-center gap-4 p-4 rounded-lg border transition-colors ${
+    <div className={`flex items-center gap-2 sm:gap-4 p-3 sm:p-4 rounded-lg border transition-colors ${
       selected ? 'border-primary-500 bg-primary-500/10' : 'border-gray-700 hover:border-gray-600'
     }`}>
       <button
         onClick={() => onSelect(track.id)}
-        className="text-gray-400 hover:text-white"
+        className="text-gray-400 hover:text-white flex-shrink-0"
       >
         {selected ? (
           <CheckSquare className="w-5 h-5 text-primary-500" />
@@ -58,34 +59,28 @@ function TrackRow({ track, selected, onSelect }) {
         )}
       </button>
       
-      {/* Mini Player */}
-      <MiniPlayer trackId={track.id} />
+      {/* Mini Player - hidden on small screens */}
+      <div className="hidden sm:block">
+        <MiniPlayer trackId={track.id} />
+      </div>
       
-      <div className="w-12 h-12 bg-gray-700 rounded flex items-center justify-center flex-shrink-0">
-        {track.matched_cover_url ? (
-          <img 
-            src={track.matched_cover_url} 
-            alt="" 
-            className="w-full h-full object-cover rounded"
-          />
-        ) : (
-          <Music className="w-6 h-6 text-gray-400" />
-        )}
+      <div className="w-10 h-10 sm:w-12 sm:h-12 bg-gray-700 rounded flex items-center justify-center flex-shrink-0 overflow-hidden">
+        <TrackCover trackId={track.id} matchedUrl={track.matched_cover_url} alt="" />
       </div>
       
       <Link to={`/tracks/${track.id}`} className="flex-1 min-w-0">
-        <p className="font-medium truncate">
+        <p className="font-medium truncate text-sm sm:text-base">
           {track.matched_title || track.title || track.filename}
         </p>
-        <p className="text-sm text-gray-400 truncate">
+        <p className="text-xs sm:text-sm text-gray-400 truncate">
           {track.matched_artist || track.artist || 'Unknown Artist'}
           {track.matched_genre && ` • ${track.matched_genre}`}
         </p>
       </Link>
       
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
         {track.match_confidence && (
-          <span className="text-sm text-gray-400">
+          <span className="text-xs sm:text-sm text-gray-400 hidden md:inline">
             {Math.round(track.match_confidence)}%
           </span>
         )}
@@ -105,6 +100,7 @@ function Tracks() {
   const [genreFilter, setGenreFilter] = useState('')
   const [artistFilter, setArtistFilter] = useState('')
   const [albumFilter, setAlbumFilter] = useState('')
+  const [formatFilter, setFormatFilter] = useState('')
   const [pageSize, setPageSize] = useState(50)
   const [currentPage, setCurrentPage] = useState(0)
   const queryClient = useQueryClient()
@@ -125,19 +121,22 @@ function Tracks() {
     staleTime: 30000,
   })
 
-  const { data: tracks, isLoading } = useQuery({
-    queryKey: ['tracks', status, searchQuery, genreFilter, artistFilter, albumFilter, pageSize, currentPage],
+  const { data: tracksRaw, isLoading } = useQuery({
+    queryKey: ['tracks', status, searchQuery, genreFilter, artistFilter, albumFilter, formatFilter, pageSize, currentPage],
     queryFn: () => getTracks({ 
       status: status || undefined, 
       search: searchQuery || undefined,
       genre: genreFilter || undefined,
       artist: artistFilter || undefined,
       album: albumFilter || undefined,
+      file_format: formatFilter || undefined,
       limit: pageSize,
       skip: currentPage * pageSize
     }),
     refetchInterval: 10000,
   })
+
+  const tracks = Array.isArray(tracksRaw) ? tracksRaw : Array.isArray(tracksRaw?.tracks) ? tracksRaw.tracks : []
 
   // Reset to first page when filters change
   const handleFilterChange = (setter) => (value) => {
@@ -154,18 +153,35 @@ function Tracks() {
   })
 
   const batchMatchMutation = useMutation({
-    mutationFn: (ids) => batchMatch(ids.length > 0 ? Array.from(ids) : null, status || 'pending'),
+    mutationFn: (ids) => batchMatch(ids.size > 0 ? Array.from(ids) : null, status || 'pending'),
     onSuccess: () => {
       setSelectedTracks(new Set())
       queryClient.invalidateQueries(['tracks'])
+      queryClient.invalidateQueries(['track-stats'])
     },
   })
 
   const batchTagMutation = useMutation({
-    mutationFn: (ids) => batchApplyTags(ids.length > 0 ? Array.from(ids) : null, ids.size === 0),
+    mutationFn: (ids) => batchApplyTags(ids.size > 0 ? Array.from(ids) : null, ids.size === 0),
     onSuccess: () => {
       setSelectedTracks(new Set())
       queryClient.invalidateQueries(['tracks'])
+      queryClient.invalidateQueries(['track-stats'])
+    },
+  })
+
+  const convertMutation = useMutation({
+    mutationFn: (ids) => convertToMp3(Array.from(ids), 320, false),
+    onSuccess: (data) => {
+      setSelectedTracks(new Set())
+      queryClient.invalidateQueries(['tracks'])
+      queryClient.invalidateQueries(['track-stats'])
+      queryClient.invalidateQueries(['track-filters'])
+      if (data?.converting === 0 || data?.started === false) {
+        alert(data?.message || 'No non-MP3 tracks in selection')
+      } else {
+        alert(`Converting ${data.converting} track(s) in the background. Check Library Scan page for progress.`)
+      }
     },
   })
 
@@ -273,13 +289,30 @@ function Tracks() {
           <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
         </div>
 
+        {/* Format Filter */}
+        <div className="relative">
+          <select
+            value={formatFilter}
+            onChange={(e) => handleFilterChange(setFormatFilter)(e.target.value)}
+            className="pl-4 pr-10 py-2 bg-gray-800 border border-gray-700 rounded-lg appearance-none focus:outline-none focus:border-primary-500 min-w-[120px]"
+            title="Filter by file extension"
+          >
+            <option value="">All Formats</option>
+            {filterOptions?.formats?.map((fmt) => (
+              <option key={fmt} value={fmt}>{fmt.toUpperCase()}</option>
+            ))}
+          </select>
+          <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+        </div>
+
         {/* Clear Filters */}
-        {(genreFilter || artistFilter || albumFilter) && (
+        {(genreFilter || artistFilter || albumFilter || formatFilter) && (
           <button
             onClick={() => {
               setGenreFilter('')
               setArtistFilter('')
               setAlbumFilter('')
+              setFormatFilter('')
               setCurrentPage(0)
             }}
             className="px-3 py-2 text-sm text-gray-400 hover:text-white flex items-center gap-1"
@@ -330,6 +363,15 @@ function Tracks() {
           >
             <Tag className="w-4 h-4" />
             Tag Selected
+          </button>
+          <button
+            onClick={() => convertMutation.mutate(selectedTracks)}
+            disabled={convertMutation.isPending}
+            className="px-3 py-1 bg-blue-600 hover:bg-blue-700 rounded text-sm flex items-center gap-2 disabled:opacity-50"
+            title="Convert non-MP3 tracks in selection to MP3 (320 kbps, keeps originals)"
+          >
+            <Music className="w-4 h-4" />
+            Convert to MP3
           </button>
           <button
             onClick={() => {

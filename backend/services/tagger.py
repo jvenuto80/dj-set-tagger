@@ -29,6 +29,8 @@ from loguru import logger
 class AudioTagger:
     """Service for writing metadata to audio files"""
     
+    MAX_COVER_ART_SIZE = 10 * 1024 * 1024  # 10 MB limit for cover art downloads
+
     async def download_cover_art(self, url: str) -> Optional[bytes]:
         """Download cover art from URL"""
         if not url:
@@ -38,14 +40,24 @@ class AudioTagger:
             async with aiohttp.ClientSession() as session:
                 async with session.get(url) as response:
                     if response.status == 200:
-                        return await response.read()
+                        # Check Content-Length header if available
+                        content_length = response.content_length
+                        if content_length and content_length > self.MAX_COVER_ART_SIZE:
+                            logger.warning(f"Cover art too large ({content_length} bytes): {url}")
+                            return None
+                        # Read with size limit
+                        data = await response.content.read(self.MAX_COVER_ART_SIZE + 1)
+                        if len(data) > self.MAX_COVER_ART_SIZE:
+                            logger.warning(f"Cover art exceeded size limit: {url}")
+                            return None
+                        return data
         except Exception as e:
             logger.error(f"Error downloading cover art: {e}")
         
         return None
     
-    def resize_cover_art(self, image_data: bytes, max_size: int = 800) -> bytes:
-        """Resize cover art to reasonable size"""
+    def resize_cover_art(self, image_data: bytes, max_size: int = 1400) -> bytes:
+        """Resize cover art to reasonable size (up to 1400px for high-DPI displays)"""
         try:
             img = Image.open(BytesIO(image_data))
             
@@ -112,15 +124,17 @@ class AudioTagger:
             elif ext == '.flac':
                 audio = FLAC(filepath)
                 if album:
-                    audio['ALBUM'] = album
+                    audio['ALBUM'] = [album]
                 if artist:
-                    audio['ARTIST'] = artist
+                    audio['ARTIST'] = [artist]
                 if genre:
-                    audio['GENRE'] = genre
+                    audio['GENRE'] = [genre]
                 if album_artist:
-                    audio['ALBUMARTIST'] = album_artist
-                # Add series marker to grouping tag
-                audio['GROUPING'] = series_marker
+                    audio['ALBUMARTIST'] = [album_artist]
+                # Add series marker — preserve existing GROUPING if present
+                existing_grouping = audio.get('GROUPING', [''])[0]
+                if series_marker not in existing_grouping:
+                    audio['GROUPING'] = [series_marker]
                 audio.save()
                 logger.info(f"Updated album/artist/genre/album_artist tags for: {filepath}")
                 return True
@@ -215,13 +229,13 @@ class AudioTagger:
             elif ext == '.flac':
                 audio = FLAC(filepath)
                 if album:
-                    audio['ALBUM'] = album
+                    audio['ALBUM'] = [album]
                 if artist:
-                    audio['ARTIST'] = artist
+                    audio['ARTIST'] = [artist]
                 if genre:
-                    audio['GENRE'] = genre
+                    audio['GENRE'] = [genre]
                 if album_artist:
-                    audio['ALBUMARTIST'] = album_artist
+                    audio['ALBUMARTIST'] = [album_artist]
                 
                 # Set cover art
                 if cover_data:
@@ -379,31 +393,31 @@ class AudioTagger:
         try:
             audio = FLAC(filepath)
             
-            # Set tags
+            # Set tags (use lists for Vorbis comment consistency)
             if title:
-                audio['TITLE'] = title
+                audio['TITLE'] = [title]
             if artist:
-                audio['ARTIST'] = artist
+                audio['ARTIST'] = [artist]
             if album:
-                audio['ALBUM'] = album
+                audio['ALBUM'] = [album]
             if genre:
-                audio['GENRE'] = genre
+                audio['GENRE'] = [genre]
             if year:
-                audio['DATE'] = str(year)
+                audio['DATE'] = [str(year)]
             
             # Set cover art
             if cover_data:
                 picture = Picture()
                 picture.type = 3  # Cover (front)
-                picture.mime = 'image/jpeg'
                 picture.desc = 'Cover'
                 picture.data = cover_data
                 
-                # Get image dimensions
+                # Detect actual image format and dimensions
                 img = Image.open(BytesIO(cover_data))
                 picture.width = img.width
                 picture.height = img.height
-                picture.depth = 24
+                picture.depth = 32 if img.mode == 'RGBA' else 24
+                picture.mime = 'image/png' if img.format == 'PNG' else 'image/jpeg'
                 
                 # Clear existing pictures and add new one
                 audio.clear_pictures()
@@ -523,14 +537,19 @@ class AudioTagger:
             return False
     
     def get_current_tags(self, filepath: str) -> Dict:
-        """Get current tags from a file"""
+        """Get current tags from a file, including Mixed In Key data"""
+        from backend.services.mik import read_mik_tags
+
         tags = {
             "title": None,
             "artist": None,
             "album": None,
             "genre": None,
             "year": None,
-            "has_cover": False
+            "has_cover": False,
+            "mik_bpm": None,
+            "mik_key": None,
+            "mik_energy": None,
         }
         
         try:
@@ -552,6 +571,12 @@ class AudioTagger:
                         tags["has_cover"] = True
                     if 'covr' in audio_full.tags:
                         tags["has_cover"] = True
+
+            # Read Mixed In Key tags (BPM, key, energy)
+            mik = read_mik_tags(filepath)
+            tags["mik_bpm"] = mik.get("bpm")
+            tags["mik_key"] = mik.get("key")
+            tags["mik_energy"] = mik.get("energy")
                         
         except Exception as e:
             logger.error(f"Error reading tags from {filepath}: {e}")

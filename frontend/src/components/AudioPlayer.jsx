@@ -2,10 +2,30 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { Play, Pause, Volume2, VolumeX } from 'lucide-react'
 import { useAudio } from '../contexts/AudioContext'
 
-const API_BASE = import.meta.env.VITE_API_URL || '/api'
+const isTauri = Boolean(window.__TAURI_INTERNALS__)
+const API_BASE = isTauri ? 'http://127.0.0.1:5050/api' : (import.meta.env.VITE_API_URL || '/api')
 
-// Cache for waveform data to avoid re-fetching
+// Cache for waveform data to avoid re-fetching (LRU-style, max 100 entries)
+const MAX_CACHE_SIZE = 100
 const waveformCache = new Map()
+
+function cacheSet(key, value) {
+  if (waveformCache.size >= MAX_CACHE_SIZE) {
+    // Delete oldest entry (first key)
+    const firstKey = waveformCache.keys().next().value
+    waveformCache.delete(firstKey)
+  }
+  waveformCache.set(key, value)
+}
+
+// Shared AudioContext to avoid creating one per track
+let sharedAudioContext = null
+function getAudioContext() {
+  if (!sharedAudioContext || sharedAudioContext.state === 'closed') {
+    sharedAudioContext = new (window.AudioContext || window.webkitAudioContext)()
+  }
+  return sharedAudioContext
+}
 
 function AudioPlayer({ trackId, compact = false, className = '' }) {
   const [isPlaying, setIsPlaying] = useState(false)
@@ -13,8 +33,10 @@ function AudioPlayer({ trackId, compact = false, className = '' }) {
   const [currentTime, setCurrentTime] = useState(0)
   const [duration, setDuration] = useState(0)
   const [isMuted, setIsMuted] = useState(false)
+  const [volume, setVolume] = useState(1)
   const [waveformData, setWaveformData] = useState([])
   const [isLoadingWaveform, setIsLoadingWaveform] = useState(false)
+  const [waveformFailed, setWaveformFailed] = useState(false)
   const [error, setError] = useState(null)
   
   const audioRef = useRef(null)
@@ -48,7 +70,7 @@ function AudioPlayer({ trackId, compact = false, className = '' }) {
     
     try {
       const audioUrl = `${API_BASE}/tracks/stream/${trackId}`
-      const audioContext = new (window.AudioContext || window.webkitAudioContext)()
+      const audioContext = getAudioContext()
       const response = await fetch(audioUrl)
       const arrayBuffer = await response.arrayBuffer()
       const audioBuffer = await audioContext.decodeAudioData(arrayBuffer)
@@ -72,20 +94,15 @@ function AudioPlayer({ trackId, compact = false, className = '' }) {
       const normalized = waveform.map(v => max > 0 ? v / max : 0.5)
       
       // Cache the result
-      waveformCache.set(trackId, normalized)
+      cacheSet(trackId, normalized)
       setWaveformData(normalized)
-      audioContext.close()
     } catch (err) {
       console.error('Error generating waveform:', err)
-      // Generate fallback waveform
-      const seed = trackId * 12345
-      const fallback = Array.from({ length: 100 }, (_, i) => {
-        const x = (seed + i * 7919) % 1000 / 1000
-        const base = 0.3 + Math.sin(i * 0.15) * 0.15
-        return Math.min(0.95, Math.max(0.15, base + x * 0.4))
-      })
-      waveformCache.set(trackId, fallback)
+      // Show simple bars instead of fake random waveform
+      const fallback = Array.from({ length: 100 }, () => 0.3)
+      cacheSet(trackId, fallback)
       setWaveformData(fallback)
+      setWaveformFailed(true)
     } finally {
       setIsLoadingWaveform(false)
     }
@@ -232,6 +249,22 @@ function AudioPlayer({ trackId, compact = false, className = '' }) {
     }
   }
 
+  const handleVolumeChange = (e) => {
+    e.stopPropagation()
+    const newVolume = parseFloat(e.target.value)
+    setVolume(newVolume)
+    if (audioRef.current) {
+      audioRef.current.volume = newVolume
+      if (newVolume === 0) {
+        setIsMuted(true)
+        audioRef.current.muted = true
+      } else if (isMuted) {
+        setIsMuted(false)
+        audioRef.current.muted = false
+      }
+    }
+  }
+
   // Handle audio ended
   const handleEnded = () => {
     setIsPlaying(false)
@@ -262,6 +295,14 @@ function AudioPlayer({ trackId, compact = false, className = '' }) {
           onLoadedMetadata={handleLoadedMetadata}
           onEnded={handleEnded}
           onPause={handlePause}
+          onError={(e) => {
+            const code = e.target?.error?.code
+            const msg = e.target?.error?.message || `audio error ${code || ''}`.trim()
+            console.error('Audio load failed:', msg, e.target?.src)
+            setError(`Failed to load audio: ${msg}`)
+            setIsLoading(false)
+            setIsPlaying(false)
+          }}
           preload="metadata"
         />
         
@@ -306,6 +347,14 @@ function AudioPlayer({ trackId, compact = false, className = '' }) {
         onLoadedMetadata={handleLoadedMetadata}
         onEnded={handleEnded}
         onPause={handlePause}
+        onError={(e) => {
+          const code = e.target?.error?.code
+          const msg = e.target?.error?.message || `audio error ${code || ''}`.trim()
+          console.error('Audio load failed:', msg, e.target?.src)
+          setError(`Failed to load audio: ${msg}`)
+          setIsLoading(false)
+          setIsPlaying(false)
+        }}
         preload="metadata"
       />
       
@@ -350,16 +399,28 @@ function AudioPlayer({ trackId, compact = false, className = '' }) {
         </div>
         
         {/* Volume control */}
-        <button
-          onClick={toggleMute}
-          className="w-8 h-8 flex items-center justify-center text-gray-400 hover:text-white transition-colors flex-shrink-0"
-        >
-          {isMuted ? (
-            <VolumeX className="w-5 h-5" />
-          ) : (
-            <Volume2 className="w-5 h-5" />
-          )}
-        </button>
+        <div className="flex items-center gap-1 flex-shrink-0">
+          <button
+            onClick={toggleMute}
+            className="w-8 h-8 flex items-center justify-center text-gray-400 hover:text-white transition-colors"
+          >
+            {isMuted || volume === 0 ? (
+              <VolumeX className="w-5 h-5" />
+            ) : (
+              <Volume2 className="w-5 h-5" />
+            )}
+          </button>
+          <input
+            type="range"
+            min="0"
+            max="1"
+            step="0.05"
+            value={isMuted ? 0 : volume}
+            onChange={handleVolumeChange}
+            onClick={e => e.stopPropagation()}
+            className="w-20 h-1 bg-gray-600 rounded-lg appearance-none cursor-pointer accent-primary-500"
+          />
+        </div>
       </div>
     </div>
   )
@@ -428,6 +489,11 @@ export function MiniPlayer({ trackId, className = '' }) {
         src={`${API_BASE}/tracks/stream/${trackId}`}
         onEnded={handleEnded}
         onPause={handlePause}
+        onError={(e) => {
+          console.error('Audio load failed:', e.target?.error?.message, e.target?.src)
+          setIsLoading(false)
+          setIsPlaying(false)
+        }}
         preload="none"
       />
       <button

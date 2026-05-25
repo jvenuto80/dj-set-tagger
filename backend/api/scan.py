@@ -47,3 +47,24 @@ async def stop_scan():
     from backend.services.scanner import stop_current_scan
     await stop_current_scan()
     return {"message": "Scan stop requested"}
+
+
+@router.post("/clear")
+async def clear_database():
+    """Clear all tracks and match candidates from the database"""
+    from backend.services.database import get_db
+    from backend.models.track import Track, MatchCandidate
+    from sqlalchemy import delete
+    
+    async with get_db() as db:
+        deleted_matches = await db.execute(delete(MatchCandidate))
+        deleted_tracks = await db.execute(delete(Track))
+        await db.commit()
+        
+        count = deleted_tracks.rowcount
+        logger.info(f"Cleared database: {count} tracks removed")
+        
+        return {
+            "message": f"Cleared {count} tracks from database",
+            "tracks_removed": count
+        }

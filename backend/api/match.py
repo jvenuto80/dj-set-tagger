@@ -12,6 +12,29 @@ from loguru import logger
 router = APIRouter()
 
 
+# NOTE: /batch and /search must be before /{track_id} to avoid route conflicts
+@router.post("/batch")
+async def batch_match(
+    background_tasks: BackgroundTasks,
+    track_ids: Optional[List[int]] = None,
+    status_filter: Optional[str] = Query(None, description="Match all tracks with this status")
+):
+    """Match multiple tracks at once"""
+    # Run batch matching in background
+    background_tasks.add_task(batch_match_tracks, track_ids, status_filter)
+    
+    return {"message": "Batch matching started"}
+
+
+@router.post("/search")
+async def search_tracklists(query: str):
+    """Search 1001Tracklists directly"""
+    from backend.services.tracklists_api import search_1001tracklists
+    
+    results = await search_1001tracklists(query)
+    return {"results": results}
+
+
 @router.post("/{track_id}")
 async def match_track(
     track_id: int,
@@ -29,19 +52,6 @@ async def match_track(
         background_tasks.add_task(find_matches, track_id)
         
         return {"message": "Matching started", "track_id": track_id}
-
-
-@router.post("/batch")
-async def batch_match(
-    background_tasks: BackgroundTasks,
-    track_ids: Optional[List[int]] = None,
-    status_filter: Optional[str] = Query(None, description="Match all tracks with this status")
-):
-    """Match multiple tracks at once"""
-    # Run batch matching in background
-    background_tasks.add_task(batch_match_tracks, track_ids, status_filter)
-    
-    return {"message": "Batch matching started"}
 
 
 @router.get("/{track_id}/results", response_model=List[MatchResult])
@@ -96,12 +106,3 @@ async def select_match(track_id: int, match_id: int):
         await db.commit()
         
         return {"message": "Match selected", "track_id": track_id}
-
-
-@router.post("/search")
-async def search_tracklists(query: str):
-    """Search 1001Tracklists directly"""
-    from backend.services.tracklists_api import search_1001tracklists
-    
-    results = await search_1001tracklists(query)
-    return {"results": results}

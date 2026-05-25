@@ -54,6 +54,20 @@ class Track(Base):
     
     # Audio fingerprint for duplicate detection
     fingerprint_hash = Column(String(32), nullable=True, index=True)
+    fingerprint_raw = Column(Text, nullable=True)  # Full Chromaprint string for similarity comparison
+    
+    # AI genre classification
+    ai_genre = Column(String, nullable=True)          # Ollama-classified genre(s), semicolon-separated
+    ai_genre_confidence = Column(Integer, nullable=True)  # 0-100
+    ai_genre_source = Column(String, nullable=True)   # Model name used for classification
+    ai_reasoning = Column(Text, nullable=True)        # LLM explanation for the classification
+    review_status = Column(String, nullable=True)     # auto_applied | needs_review | manual_review | approved | rejected
+    consistency_flag = Column(String, nullable=True)  # Notes from cross-track consistency pass (e.g. "Artist majority: Techno")
+    
+    # Mixed In Key data (read-only, never written by SetList)
+    mik_bpm = Column(Float, nullable=True)
+    mik_key = Column(String, nullable=True)
+    mik_energy = Column(Integer, nullable=True)
     
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -95,6 +109,14 @@ class MatchCandidate(Base):
     
     # Relationships
     track = relationship("Track", back_populates="match_candidates")
+
+
+class AppSettingDB(Base):
+    """SQLAlchemy model for application settings (key-value store)"""
+    __tablename__ = "app_settings"
+    
+    key = Column(String, primary_key=True, nullable=False)
+    value = Column(Text, nullable=True)
 
 
 # Pydantic schemas for API
@@ -146,6 +168,21 @@ class TrackResponse(BaseModel):
     status: str
     error_message: Optional[str] = None
     fingerprint_hash: Optional[str] = None
+    fingerprint_raw: Optional[str] = None
+    
+    # AI genre classification
+    ai_genre: Optional[str] = None
+    ai_genre_confidence: Optional[int] = None
+    ai_genre_source: Optional[str] = None
+    ai_reasoning: Optional[str] = None
+    review_status: Optional[str] = None
+    consistency_flag: Optional[str] = None
+    
+    # Mixed In Key (read-only)
+    mik_bpm: Optional[float] = None
+    mik_key: Optional[str] = None
+    mik_energy: Optional[int] = None
+    
     created_at: datetime
     updated_at: datetime
     tagged_at: Optional[datetime] = None

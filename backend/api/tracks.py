@@ -1,7 +1,7 @@
 """
 Tracks API endpoints
 """
-from fastapi import APIRouter, HTTPException, Query, BackgroundTasks
+from fastapi import APIRouter, HTTPException, Query, BackgroundTasks, Request
 from typing import List, Optional
 from backend.services.database import get_db
 from backend.models.track import Track, TrackResponse, TrackUpdate
@@ -9,22 +9,19 @@ from backend.config import settings
 from sqlalchemy import select, or_
 from sqlalchemy.orm import Session
 from loguru import logger
+from pathlib import Path
 import os
 import json
 
 router = APIRouter()
 
 
-def get_min_duration_seconds() -> int:
+async def get_min_duration_seconds() -> int:
     """Get minimum duration setting in seconds"""
-    from backend.config import settings
-    settings_file = os.path.join(settings.config_dir, "settings.json")
-    if os.path.exists(settings_file):
-        with open(settings_file, "r") as f:
-            saved = json.load(f)
-            minutes = saved.get("min_duration_minutes", 0)
-            return minutes * 60
-    return 0
+    from backend.services.database import load_saved_settings_db
+    saved = await load_saved_settings_db()
+    minutes = saved.get("min_duration_minutes", 0)
+    return minutes * 60
 
 
 @router.get("", response_model=List[TrackResponse])
@@ -37,6 +34,8 @@ async def get_tracks(
     genre: Optional[str] = Query(None, description="Filter by genre"),
     artist: Optional[str] = Query(None, description="Filter by artist"),
     album: Optional[str] = Query(None, description="Filter by album"),
+    file_format: Optional[str] = Query(None, description="Filter by file format (mp3, flac, wav, m4a, ...)"),
+    review_status: Optional[str] = Query(None, description="Filter by review_status: auto_applied|needs_review|manual_review|approved|rejected"),
     apply_duration_filter: bool = Query(True, description="Apply minimum duration filter from settings")
 ):
     """Get all scanned tracks with optional filtering"""
@@ -49,6 +48,10 @@ async def get_tracks(
         if status:
             query = query.where(Track.status == status)
             count_query = count_query.where(Track.status == status)
+
+        if review_status:
+            query = query.where(Track.review_status == review_status)
+            count_query = count_query.where(Track.review_status == review_status)
         
         if search:
             search_term = f"%{search}%"
@@ -77,10 +80,16 @@ async def get_tracks(
             album_filter = (Track.matched_album == album) | (Track.album == album)
             query = query.where(album_filter)
             count_query = count_query.where(album_filter)
+
+        # Filter by file format (case-insensitive match on stored extension)
+        if file_format:
+            fmt = file_format.lower().lstrip('.')
+            query = query.where(func.lower(Track.file_format) == fmt)
+            count_query = count_query.where(func.lower(Track.file_format) == fmt)
         
         # Apply minimum duration filter
         if apply_duration_filter:
-            min_duration = get_min_duration_seconds()
+            min_duration = await get_min_duration_seconds()
             if min_duration > 0:
                 query = query.where(Track.duration >= min_duration)
                 count_query = count_query.where(Track.duration >= min_duration)
@@ -102,7 +111,7 @@ async def get_track_stats():
         from sqlalchemy import func
         
         # Get minimum duration filter
-        min_duration = get_min_duration_seconds()
+        min_duration = await get_min_duration_seconds()
         
         # Total counts (unfiltered)
         total_all = await db.scalar(select(func.count(Track.id)))
@@ -149,7 +158,7 @@ async def get_track_filters():
     from sqlalchemy import func, distinct
     
     async with get_db() as db:
-        min_duration = get_min_duration_seconds()
+        min_duration = await get_min_duration_seconds()
         
         # Base query with duration filter
         base_filter = Track.duration >= min_duration if min_duration > 0 else True
@@ -186,11 +195,23 @@ async def get_track_filters():
         )
         album_result = await db.execute(album_query)
         albums = sorted([a for (a,) in album_result.fetchall() if a])
-        
+
+        # Get unique file formats (normalized lowercase)
+        format_query = select(distinct(func.lower(Track.file_format))).where(
+            base_filter
+        ).where(
+            Track.file_format.isnot(None)
+        ).where(
+            Track.file_format != ''
+        )
+        format_result = await db.execute(format_query)
+        formats = sorted([f for (f,) in format_result.fetchall() if f])
+
         return {
             "genres": genres,
             "artists": artists,
-            "albums": albums
+            "albums": albums,
+            "formats": formats,
         }
 
 
@@ -320,16 +341,20 @@ async def delete_track_file(track_id: int):
         # Security check: Ensure file is within allowed music directories
         # Load configured scan directories from settings
         from backend.api.settings import load_saved_settings
-        saved_settings = load_saved_settings()
-        allowed_dirs = saved_settings.get("music_dirs", [settings.MUSIC_DIR])
+        saved_settings = await load_saved_settings()
+        allowed_dirs = saved_settings.get("music_dirs", [settings.music_dir])
         if not allowed_dirs:
-            allowed_dirs = [settings.MUSIC_DIR]
+            allowed_dirs = [settings.music_dir]
         
         real_filepath = os.path.realpath(filepath)
-        is_allowed = any(
-            real_filepath.startswith(os.path.realpath(allowed_dir))
-            for allowed_dir in allowed_dirs
-        )
+        is_allowed = False
+        for allowed_dir in allowed_dirs:
+            try:
+                Path(real_filepath).relative_to(os.path.realpath(allowed_dir))
+                is_allowed = True
+                break
+            except ValueError:
+                continue
         
         if not is_allowed:
             logger.warning(f"Attempted to delete file outside allowed directories: {filepath}")
@@ -360,6 +385,125 @@ async def delete_track_file(track_id: int):
         return {"message": f"Deleted {filename}", "filepath": filepath}
 
 
+@router.post("/auto-match")
+async def auto_match_from_metadata():
+    """Auto-populate matched fields from parsed filename/file metadata for all pending tracks.
+    This copies title/artist/album/genre/year from the file's existing tags into the matched fields,
+    setting the track to 'matched' status so it can be tagged."""
+    async with get_db() as db:
+        result = await db.execute(
+            select(Track).where(Track.status == "pending")
+        )
+        tracks = result.scalars().all()
+        
+        count = 0
+        for track in tracks:
+            # Use existing metadata from file tags or filename parsing
+            has_data = track.title or track.artist
+            if has_data:
+                track.matched_title = track.title
+                track.matched_artist = track.artist
+                track.matched_album = track.album
+                track.matched_genre = track.genre
+                track.matched_year = track.year
+                track.match_source = "filename"
+                track.match_confidence = 100.0
+                track.status = "matched"
+                count += 1
+        
+        await db.commit()
+        logger.info(f"Auto-matched {count} tracks from filename metadata")
+        
+        return {
+            "message": f"Auto-matched {count} tracks from existing metadata",
+            "matched": count,
+            "skipped": len(tracks) - count
+        }
+
+
+@router.post("/batch-cover-art")
+async def batch_cover_art(background_tasks: BackgroundTasks):
+    """Search for cover art for all matched tracks that don't have one yet."""
+    from backend.services.google_search import GoogleSearchService
+    
+    async with get_db() as db:
+        result = await db.execute(
+            select(Track).where(
+                Track.status.in_(["matched", "tagged"]),
+                (Track.matched_cover_url.is_(None)) | (Track.matched_cover_url == "")
+            )
+        )
+        tracks = result.scalars().all()
+        
+        if not tracks:
+            return {"message": "All tracks already have cover art", "updated": 0}
+    
+    async def _search_covers():
+        search = GoogleSearchService()
+        updated = 0
+        failed = 0
+        
+        import re
+        
+        def clean_query(artist, title):
+            """Build a clean search query from artist/title, removing junk like BPM/key"""
+            parts = []
+            if artist:
+                # Remove leading numbers like "134 - " or "058 " or "406 "
+                clean_artist = re.sub(r'^\d{1,4}\s*[-–]?\s*', '', artist).strip()
+                # Remove website domains
+                clean_artist = re.sub(r'www\.\S+', '', clean_artist).strip()
+                if clean_artist:
+                    parts.append(clean_artist)
+            if title:
+                # Remove key/BPM patterns like "9A - 130.00" or "- 5B - 108"
+                clean_title = re.sub(r'\s*[-–]\s*\d+[AB]\s*[-–]\s*\d+[\.\d]*\s*$', '', title, flags=re.IGNORECASE).strip()
+                # Remove "(Original Mix)" etc for cleaner search
+                clean_title = re.sub(r'\s*\(Original Mix\)', '', clean_title, flags=re.IGNORECASE).strip()
+                # Remove website domains
+                clean_title = re.sub(r'www\.\S+', '', clean_title).strip()
+                # Remove trailing " - " junk
+                clean_title = re.sub(r'\s*[-–]\s*$', '', clean_title).strip()
+                if clean_title:
+                    parts.append(clean_title)
+            return ' '.join(parts)
+        
+        for track in tracks:
+            artist = track.matched_artist or track.artist or ''
+            title = track.matched_title or track.title or ''
+            query = clean_query(artist, title)
+            
+            if not query or len(query) < 3:
+                continue
+            
+            try:
+                covers = await search.search_cover_art(query)
+                if covers and len(covers) > 0:
+                    async with get_db() as db:
+                        result = await db.execute(select(Track).where(Track.id == track.id))
+                        t = result.scalar_one_or_none()
+                        if t:
+                            t.matched_cover_url = covers[0]['url']
+                            await db.commit()
+                            updated += 1
+                
+                # Rate limit
+                import asyncio
+                await asyncio.sleep(1.0)
+            except Exception as e:
+                logger.error(f"Cover art search failed for track {track.id}: {e}")
+                failed += 1
+        
+        logger.info(f"Batch cover art: {updated} updated, {failed} failed out of {len(tracks)}")
+    
+    background_tasks.add_task(_search_covers)
+    
+    return {
+        "message": f"Searching cover art for {len(tracks)} tracks in background",
+        "total": len(tracks)
+    }
+
+
 @router.get("/series/detect")
 async def detect_series(
     min_tracks: int = Query(2, description="Minimum tracks to form a series"),
@@ -370,7 +514,7 @@ async def detect_series(
     from collections import defaultdict
     
     # Get minimum duration filter
-    min_duration = get_min_duration_seconds()
+    min_duration = await get_min_duration_seconds()
     
     def clean_filename(filename: str) -> str:
         """Clean filename for comparison"""
@@ -807,7 +951,7 @@ async def get_tagged_series(min_tracks: int = Query(2, description="Minimum trac
     from collections import defaultdict
     
     # Get minimum duration filter
-    min_duration = get_min_duration_seconds()
+    min_duration = await get_min_duration_seconds()
     
     def clean_filename(filename: str) -> str:
         """Clean filename for comparison"""
@@ -981,25 +1125,32 @@ async def search_musicbrainz_by_tracks(track_names: List[str]):
 
 
 @router.get("/stream/{track_id}")
-async def stream_track(track_id: int):
-    """Stream audio file for playback"""
-    from fastapi.responses import FileResponse
+async def stream_track(track_id: int, request: Request):
+    """Stream audio file for playback with HTTP Range support.
+
+    Tauri's WebKit (and browsers) require ``Accept-Ranges: bytes`` and proper
+    206 Partial Content responses for ``<audio>`` playback to work reliably.
+    Without this, the audio element silently fails to start on most builds.
+    """
+    from fastapi.responses import Response, StreamingResponse
     import mimetypes
-    
+
     async with get_db() as db:
         result = await db.execute(select(Track).where(Track.id == track_id))
         track = result.scalar_one_or_none()
-        
+
         if not track:
             raise HTTPException(status_code=404, detail="Track not found")
-        
+
+        if not track.filepath:
+            raise HTTPException(status_code=404, detail="Track has no filepath")
+
         if not os.path.exists(track.filepath):
             raise HTTPException(status_code=404, detail="Audio file not found")
-        
+
         # Determine media type
         mime_type, _ = mimetypes.guess_type(track.filepath)
         if not mime_type:
-            # Default based on extension
             ext = os.path.splitext(track.filepath)[1].lower()
             mime_types = {
                 '.mp3': 'audio/mpeg',
@@ -1010,11 +1161,69 @@ async def stream_track(track_id: int):
                 '.aac': 'audio/aac',
             }
             mime_type = mime_types.get(ext, 'audio/mpeg')
-        
-        return FileResponse(
-            track.filepath,
+
+        file_size = os.path.getsize(track.filepath)
+        range_header = request.headers.get('range') or request.headers.get('Range')
+        filepath = track.filepath
+
+        # Parse Range header: "bytes=START-END" (END optional)
+        start = 0
+        end = file_size - 1
+        is_partial = False
+        if range_header and range_header.startswith('bytes='):
+            try:
+                spec = range_header[len('bytes='):].split(',', 1)[0].strip()
+                start_str, _, end_str = spec.partition('-')
+                if start_str:
+                    start = int(start_str)
+                if end_str:
+                    end = min(int(end_str), file_size - 1)
+                else:
+                    end = file_size - 1
+                if start > end or start >= file_size:
+                    return Response(
+                        status_code=416,
+                        headers={'Content-Range': f'bytes */{file_size}'},
+                    )
+                is_partial = True
+            except ValueError:
+                # Malformed header — fall back to full response
+                start, end, is_partial = 0, file_size - 1, False
+
+        content_length = end - start + 1
+        chunk_size = 64 * 1024
+
+        def iter_file():
+            try:
+                with open(filepath, 'rb') as f:
+                    f.seek(start)
+                    remaining = content_length
+                    while remaining > 0:
+                        data = f.read(min(chunk_size, remaining))
+                        if not data:
+                            break
+                        remaining -= len(data)
+                        yield data
+            except Exception as e:
+                logger.error(f"Error streaming {filepath}: {e}")
+                raise
+
+        headers = {
+            'Accept-Ranges': 'bytes',
+            'Content-Length': str(content_length),
+            'Cache-Control': 'no-cache',
+        }
+        if is_partial:
+            headers['Content-Range'] = f'bytes {start}-{end}/{file_size}'
+            status_code = 206
+        else:
+            status_code = 200
+
+        return StreamingResponse(
+            iter_file(),
+            status_code=status_code,
             media_type=mime_type,
-            filename=track.filename
+            headers=headers,
         )
 
 

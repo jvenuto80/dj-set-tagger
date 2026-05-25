@@ -402,8 +402,8 @@ class TracklistsAPI:
                 try:
                     total = text.split("IDed")[1].split("short")[0].strip().split("/")[1].split()[0]
                     metadata["num_tracks"] = int(total)
-                except:
-                    pass
+                except (IndexError, ValueError) as e:
+                    logger.debug(f"Could not parse track count: {e}")
                     
         except Exception as e:
             logger.debug(f"Error parsing tracklist metadata: {e}")

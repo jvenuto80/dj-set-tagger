@@ -7,9 +7,10 @@ import {
   Square, 
   CheckCircle,
   AlertCircle,
-  Loader2
+  Loader2,
+  Trash2
 } from 'lucide-react'
-import { startScan, getScanStatus, stopScan, getSettings } from '../api'
+import { startScan, getScanStatus, stopScan, clearDatabase, getSettings } from '../api'
 import ProgressButton from '../components/ProgressButton'
 
 function Scan() {
@@ -186,9 +187,28 @@ function Scan() {
                 </div>
                 
                 {status.files_skipped > 0 && status.files_added === 0 && (
-                  <p className="text-sm text-gray-400">
-                    All files were already in the database. Scan a different directory or clear database to re-scan.
-                  </p>
+                  <div className="space-y-2">
+                    <p className="text-sm text-gray-400">
+                      All files were already in the database.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (window.confirm('This will remove all tracks from the database. Your audio files will NOT be deleted. Continue?')) {
+                          clearDatabase().then(() => {
+                            queryClient.invalidateQueries(['scan-status'])
+                            queryClient.invalidateQueries(['track-stats'])
+                            queryClient.invalidateQueries(['tracks'])
+                            refetchStatus()
+                          })
+                        }
+                      }}
+                      className="flex items-center gap-2 px-3 py-1.5 bg-red-600/20 hover:bg-red-600/30 text-red-400 rounded-lg text-sm"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                      Clear Database & Re-scan
+                    </button>
+                  </div>
                 )}
                 
                 {status.files_filtered > 0 && (

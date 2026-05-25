@@ -67,3 +67,12 @@ htmlcov/
 # Environment
 .env
 .env.local
+
+# Tauri build artifacts
+frontend/src-tauri/target/
+frontend/src-tauri/resources/
+frontend/src-tauri/gen/schemas/
+frontend/dist/
+
+# Local env
+.env
