@@ -117,8 +117,8 @@ required.
 | **Library Scan** — AI classification + FLAC→MP3 conversion | **Series Detection** — group radio shows |
 | ![Series Tagged](docs/series-tagged.png) | ![Duplicates](docs/duplicates.png) |
 | **Series Tagged** — manage applied series | **Duplicates** — waveform compare + safe delete |
-| ![Settings](docs/settings.png) | |
-| **Settings** — all knobs in one place | |
+| ![Settings](docs/settings.png) | ![Review Queue](docs/review-queue.png) |
+| **Settings** — all knobs in one place | **Review Queue** — approve / reject AI suggestions |
 
 ---
 
