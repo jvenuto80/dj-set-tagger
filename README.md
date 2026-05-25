@@ -113,10 +113,12 @@ required.
 | **Dashboard** — library stats at a glance | **Tracks** — filter, multi-select, bulk actions |
 | ![Track Detail](docs/track-detail.png) | ![Scan](docs/scan.png) |
 | **Track Detail** — match, edit, choose cover | **Scan** — point at music dirs |
-| ![Series To Tag](docs/series-to-tag.png) | ![Series Tagged](docs/series-tagged.png) |
-| **Series Detection** — group radio shows | **Series Tagged** — manage applied series |
-| ![Duplicates](docs/duplicates.png) | ![Settings](docs/settings.png) |
-| **Duplicates** — waveform compare + safe delete | **Settings** — all knobs in one place |
+| ![Library Scan](docs/library-scan.png) | ![Series To Tag](docs/series-to-tag.png) |
+| **Library Scan** — AI classification + FLAC→MP3 conversion | **Series Detection** — group radio shows |
+| ![Series Tagged](docs/series-tagged.png) | ![Duplicates](docs/duplicates.png) |
+| **Series Tagged** — manage applied series | **Duplicates** — waveform compare + safe delete |
+| ![Settings](docs/settings.png) | |
+| **Settings** — all knobs in one place | |
 
 ---
 
