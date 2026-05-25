@@ -87,7 +87,7 @@ function Layout({ children }) {
         
         <div className="p-4 border-t border-gray-700">
           <div className="text-xs text-gray-500 text-center">
-            SetList v1.0 beta
+            SetList v1.2.0-beta
           </div>
         </div>
       </aside>
