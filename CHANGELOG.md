@@ -2,6 +2,22 @@
 
 All notable changes to SetList will be documented in this file.
 
+## [1.3.0-beta] - 2026-06-07
+
+### Added
+- **Bulk tag popup on the Tracks page** — the **Tag Selected** button now opens
+  a modal to edit Title, Artist, Album, Album Artist, Genre, and Year across all
+  selected tracks in one action.
+  - Shared values are prefilled when every selected track agrees on a field.
+  - Per-field **Clear** toggles remove a tag across the whole selection.
+  - **Apply existing matched tags only** checkbox writes current matched
+    metadata to files without changing any fields.
+  - A success toast confirms when bulk tagging has started.
+
+### Changed
+- App version bumped to **1.3.0-beta** across `backend/main.py`,
+  `frontend/package.json`, `tauri.conf.json`, and `Cargo.toml`.
+
 ## [1.2.0-beta] - 2026-05-24
 
 ### Added

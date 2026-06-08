@@ -1,6 +1,6 @@
 # SetList
 
-**Version 1.2.0-beta** — A native macOS desktop application for organizing,
+**Version 1.3.0-beta** — A native macOS desktop application for organizing,
 tagging, deduplicating, and AI-classifying a large music library. Built for DJs,
 collectors, and anyone with thousands of files that need clean metadata.
 

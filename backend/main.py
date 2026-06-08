@@ -67,7 +67,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="SetList",
     description="Organize and tag your music library - DJ sets, podcasts, radio shows, and albums",
-    version="1.2.0-beta",
+    version="1.3.0-beta",
     lifespan=lifespan
 )
 
@@ -101,7 +101,7 @@ async def health_check():
     """Health check endpoint"""
     return {
         "status": "healthy",
-        "version": "1.2.0-beta",
+        "version": "1.3.0-beta",
         # Always native now (Docker mode was removed). Kept in the response for
         # backward compatibility with older frontends that still read this key.
         "native": True
@@ -114,7 +114,7 @@ async def api_root():
     return {
         "message": "SetList API",
         "docs": "/docs",
-        "version": "1.2.0-beta"
+        "version": "1.3.0-beta"
     }
 
 # In native mode, serve the frontend from the built dist directory
