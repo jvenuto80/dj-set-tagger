@@ -2,9 +2,15 @@
 Settings API endpoints
 """
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from typing import List
-from backend.config import settings
+from backend.config import (
+    settings,
+    normalize_scan_extensions,
+    validate_fuzzy_threshold,
+    validate_tracklists_delay,
+    validate_min_duration_minutes,
+)
 from backend.services.database import load_saved_settings_db, save_settings_db
 import os
 from loguru import logger
@@ -22,6 +28,26 @@ class AppSettings(BaseModel):
     min_duration_minutes: int
     acoustid_api_key: str = ""
 
+    @field_validator("scan_extensions", mode="before")
+    @classmethod
+    def _validate_scan_extensions(cls, value):
+        return normalize_scan_extensions(value)
+
+    @field_validator("fuzzy_threshold")
+    @classmethod
+    def _validate_fuzzy_threshold(cls, value: int) -> int:
+        return validate_fuzzy_threshold(value)
+
+    @field_validator("tracklists_delay")
+    @classmethod
+    def _validate_tracklists_delay(cls, value: float) -> float:
+        return validate_tracklists_delay(value)
+
+    @field_validator("min_duration_minutes")
+    @classmethod
+    def _validate_min_duration_minutes(cls, value: int) -> int:
+        return validate_min_duration_minutes(value)
+
 
 class SettingsUpdate(BaseModel):
     """Settings update model"""
@@ -32,6 +58,32 @@ class SettingsUpdate(BaseModel):
     tracklists_delay: float | None = None
     min_duration_minutes: int | None = None
     acoustid_api_key: str | None = None
+
+    @field_validator("scan_extensions", mode="before")
+    @classmethod
+    def _validate_scan_extensions(cls, value):
+        return normalize_scan_extensions(value, allow_none=True)
+
+    @field_validator("fuzzy_threshold")
+    @classmethod
+    def _validate_fuzzy_threshold(cls, value: int | None) -> int | None:
+        if value is None:
+            return value
+        return validate_fuzzy_threshold(value)
+
+    @field_validator("tracklists_delay")
+    @classmethod
+    def _validate_tracklists_delay(cls, value: float | None) -> float | None:
+        if value is None:
+            return value
+        return validate_tracklists_delay(value)
+
+    @field_validator("min_duration_minutes")
+    @classmethod
+    def _validate_min_duration_minutes(cls, value: int | None) -> int | None:
+        if value is None:
+            return value
+        return validate_min_duration_minutes(value)
 
 
 async def load_saved_settings() -> dict:

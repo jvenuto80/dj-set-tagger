@@ -1,6 +1,6 @@
 # SetList
 
-**Version 1.3.0-beta** — A native macOS desktop application for organizing,
+**Version 1.4.0** — A native macOS desktop application for organizing,
 tagging, deduplicating, and AI-classifying a large music library. Built for DJs,
 collectors, and anyone with thousands of files that need clean metadata.
 
@@ -57,6 +57,13 @@ required.
 ### Metadata & matching
 - 🔍 **1001Tracklists matching** — fuzzy string search + scraping for DJ sets,
   radio shows, and podcast episodes
+- 🎯 **Version-aware DJ matching** — Levenshtein + phonetic scoring that
+  understands remixes, edits, bootlegs, and "feat." credits so the right
+  version wins (built for obscure, hard-to-ID tracks)
+- 🆔 **Fingerprint-weighted auto-accept** — a confident AcoustID match dominates
+  noisy filename signals, with gap-aware auto-accept to avoid wrong picks
+- ▶️ **Compare on YouTube** — list candidate YouTube videos for a track and play
+  them inline (or open in the browser) to audibly A/B against your file
 - 💿 **MusicBrainz** integration for CD albums (search by track listing)
 - 🎶 **Discogs + Spotify + Last.fm** enrichment for genre, label, and release
   metadata cross-referencing
@@ -126,7 +133,7 @@ required.
 
 ### Option A: Pre-built bundle (recommended)
 
-1. Grab the latest `SetList_1.2.0_aarch64.dmg` from the GitHub Releases page.
+1. Grab the latest `SetList_1.4.0_aarch64.dmg` from the GitHub Releases page.
 2. Open the DMG and drag **SetList.app** to `/Applications` (or any folder).
 3. Right-click → **Open** the first time (Gatekeeper) and confirm.
 4. The first launch creates `~/.setlist/` for the database and bundled Python
@@ -198,6 +205,11 @@ Everything about one track on a single screen.
 - **Apply Tags to File** button — writes everything to the audio file.
 - **Identify Audio** button — uploads the fingerprint to AcoustID and lists
   candidate matches.
+- **Compare on YouTube** panel — **Find videos** searches YouTube for likely
+  versions of the track. Play a result inline to A/B against your file, or use
+  **Watch on YouTube** / **Open** to launch it in your default browser. Videos
+  whose owners disable embedding show a friendly fallback link instead of an
+  error.
 
 ### Library Scan
 The AI workflow page.
@@ -403,6 +415,7 @@ never bound to a public interface). Full OpenAPI docs are available at
 | `/api/ai` | Ollama models, classify, review queue, consistency pass, enrichment |
 | `/api/covers` | Cover-art download + embedded image fetch |
 | `/api/dedup` | Near-duplicate detection, auto-resolve, quality scoring |
+| `/api/youtube` | YouTube candidate search, inline embed page, open-in-browser |
 | `/api/settings` | Get/patch settings, directories, mounts, logs, wipe DB |
 
 Notable endpoints:
@@ -414,6 +427,9 @@ Notable endpoints:
 - `GET /api/library/scan/status` — live phase + progress.
 - `POST /api/library/scan/stop` — graceful cancel.
 - `GET /api/covers/embedded/{id}/image` — embedded cover art for a track, with 1-hour cache.
+- `GET /api/youtube/{track_id}/candidates?limit=6` — YouTube videos that may match a track (via yt-dlp; no API key needed).
+- `GET /api/youtube/embed/{video_id}` — local embed page that hosts the YouTube player (works around webview referrer errors).
+- `GET /api/youtube/open?video_id=…` — open a YouTube watch URL in the system browser.
 
 ---
 
@@ -489,7 +505,7 @@ bash scripts/build-macos.sh
 
 Outputs:
 - `~/Desktop/SetList.app` — the runnable bundle (also installed to your Desktop)
-- `~/Desktop/SetList_1.2.0_aarch64.dmg` — installable disk image
+- `~/Desktop/SetList_1.4.0_aarch64.dmg` — installable disk image
 
 ### Run in dev mode
 

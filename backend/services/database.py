@@ -36,93 +36,153 @@ async def init_db():
         # Create all tables
         await conn.run_sync(Base.metadata.create_all)
         logger.info("Database initialized")
-        
-        # Run migrations for new columns
+
+        # Ensure migration tracking exists before applying migrations
+        await conn.execute(text(
+            """
+            CREATE TABLE IF NOT EXISTS schema_migrations (
+                name VARCHAR PRIMARY KEY,
+                applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        ))
+
+        # Run migrations for new columns/indexes
         await run_migrations(conn)
     
     # Migrate settings.json to database if needed
     await _migrate_settings_json()
 
 
+async def _table_columns(conn, table_name: str) -> set[str]:
+    result = await conn.execute(text(f"PRAGMA table_info({table_name})"))
+    return {row[1] for row in result.fetchall()}
+
+
+async def _applied_migrations(conn) -> set[str]:
+    result = await conn.execute(text("SELECT name FROM schema_migrations"))
+    return {row[0] for row in result.fetchall()}
+
+
+async def _record_migration(conn, name: str):
+    await conn.execute(
+        text("INSERT OR IGNORE INTO schema_migrations (name) VALUES (:name)"),
+        {"name": name},
+    )
+
+
 async def run_migrations(conn):
-    """Run database migrations for new columns"""
-    try:
-        result = await conn.execute(text("PRAGMA table_info(tracks)"))
-        columns = [row[1] for row in result.fetchall()]
-        
-        # Audio fingerprint column
-        if 'fingerprint_hash' not in columns:
-            await conn.execute(text(
-                "ALTER TABLE tracks ADD COLUMN fingerprint_hash VARCHAR(32)"
-            ))
-            logger.info("Added fingerprint_hash column to tracks table")
-        
-        # AI genre classification columns
-        if 'ai_genre' not in columns:
-            await conn.execute(text(
-                "ALTER TABLE tracks ADD COLUMN ai_genre VARCHAR"
-            ))
-            logger.info("Added ai_genre column to tracks table")
-        
-        if 'ai_genre_confidence' not in columns:
-            await conn.execute(text(
-                "ALTER TABLE tracks ADD COLUMN ai_genre_confidence INTEGER"
-            ))
-            logger.info("Added ai_genre_confidence column to tracks table")
-        
-        if 'ai_genre_source' not in columns:
-            await conn.execute(text(
-                "ALTER TABLE tracks ADD COLUMN ai_genre_source VARCHAR"
-            ))
-            logger.info("Added ai_genre_source column to tracks table")
-        
-        # Mixed In Key cached fields
-        if 'mik_bpm' not in columns:
-            await conn.execute(text(
-                "ALTER TABLE tracks ADD COLUMN mik_bpm FLOAT"
-            ))
-            logger.info("Added mik_bpm column to tracks table")
-        
-        if 'mik_key' not in columns:
-            await conn.execute(text(
-                "ALTER TABLE tracks ADD COLUMN mik_key VARCHAR"
-            ))
-            logger.info("Added mik_key column to tracks table")
-        
-        if 'mik_energy' not in columns:
-            await conn.execute(text(
-                "ALTER TABLE tracks ADD COLUMN mik_energy INTEGER"
-            ))
-            logger.info("Added mik_energy column to tracks table")
-        
-        # Raw Chromaprint fingerprint for similarity comparison
-        if 'fingerprint_raw' not in columns:
-            await conn.execute(text(
-                "ALTER TABLE tracks ADD COLUMN fingerprint_raw TEXT"
-            ))
-            logger.info("Added fingerprint_raw column to tracks table")
+    """Run idempotent schema migrations and fail loudly on migration errors."""
+    await conn.execute(text(
+        """
+        CREATE TABLE IF NOT EXISTS schema_migrations (
+            name VARCHAR PRIMARY KEY,
+            applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    ))
 
-        # Phase 4: review queue + consistency pass
-        if 'ai_reasoning' not in columns:
-            await conn.execute(text(
-                "ALTER TABLE tracks ADD COLUMN ai_reasoning TEXT"
-            ))
-            logger.info("Added ai_reasoning column to tracks table")
+    track_columns = await _table_columns(conn, "tracks")
+    applied = await _applied_migrations(conn)
 
-        if 'review_status' not in columns:
-            await conn.execute(text(
-                "ALTER TABLE tracks ADD COLUMN review_status VARCHAR"
-            ))
-            logger.info("Added review_status column to tracks table")
+    migrations = [
+        {
+            "name": "tracks_add_fingerprint_hash",
+            "sql": "ALTER TABLE tracks ADD COLUMN fingerprint_hash VARCHAR(32)",
+            "already_applied": "fingerprint_hash" in track_columns,
+            "log": "Added fingerprint_hash column to tracks table",
+        },
+        {
+            "name": "tracks_add_ai_genre",
+            "sql": "ALTER TABLE tracks ADD COLUMN ai_genre VARCHAR",
+            "already_applied": "ai_genre" in track_columns,
+            "log": "Added ai_genre column to tracks table",
+        },
+        {
+            "name": "tracks_add_ai_genre_confidence",
+            "sql": "ALTER TABLE tracks ADD COLUMN ai_genre_confidence INTEGER",
+            "already_applied": "ai_genre_confidence" in track_columns,
+            "log": "Added ai_genre_confidence column to tracks table",
+        },
+        {
+            "name": "tracks_add_ai_genre_source",
+            "sql": "ALTER TABLE tracks ADD COLUMN ai_genre_source VARCHAR",
+            "already_applied": "ai_genre_source" in track_columns,
+            "log": "Added ai_genre_source column to tracks table",
+        },
+        {
+            "name": "tracks_add_mik_bpm",
+            "sql": "ALTER TABLE tracks ADD COLUMN mik_bpm FLOAT",
+            "already_applied": "mik_bpm" in track_columns,
+            "log": "Added mik_bpm column to tracks table",
+        },
+        {
+            "name": "tracks_add_mik_key",
+            "sql": "ALTER TABLE tracks ADD COLUMN mik_key VARCHAR",
+            "already_applied": "mik_key" in track_columns,
+            "log": "Added mik_key column to tracks table",
+        },
+        {
+            "name": "tracks_add_mik_energy",
+            "sql": "ALTER TABLE tracks ADD COLUMN mik_energy INTEGER",
+            "already_applied": "mik_energy" in track_columns,
+            "log": "Added mik_energy column to tracks table",
+        },
+        {
+            "name": "tracks_add_fingerprint_raw",
+            "sql": "ALTER TABLE tracks ADD COLUMN fingerprint_raw TEXT",
+            "already_applied": "fingerprint_raw" in track_columns,
+            "log": "Added fingerprint_raw column to tracks table",
+        },
+        {
+            "name": "tracks_add_ai_reasoning",
+            "sql": "ALTER TABLE tracks ADD COLUMN ai_reasoning TEXT",
+            "already_applied": "ai_reasoning" in track_columns,
+            "log": "Added ai_reasoning column to tracks table",
+        },
+        {
+            "name": "tracks_add_review_status",
+            "sql": "ALTER TABLE tracks ADD COLUMN review_status VARCHAR",
+            "already_applied": "review_status" in track_columns,
+            "log": "Added review_status column to tracks table",
+        },
+        {
+            "name": "tracks_add_consistency_flag",
+            "sql": "ALTER TABLE tracks ADD COLUMN consistency_flag VARCHAR",
+            "already_applied": "consistency_flag" in track_columns,
+            "log": "Added consistency_flag column to tracks table",
+        },
+        {
+            "name": "tracks_add_status_index",
+            "sql": "CREATE INDEX IF NOT EXISTS ix_tracks_status ON tracks (status)",
+            "already_applied": False,
+            "log": "Ensured ix_tracks_status index on tracks.status",
+        },
+        {
+            "name": "match_candidates_add_track_id_index",
+            "sql": "CREATE INDEX IF NOT EXISTS ix_match_candidates_track_id ON match_candidates (track_id)",
+            "already_applied": False,
+            "log": "Ensured ix_match_candidates_track_id index on match_candidates.track_id",
+        },
+    ]
 
-        if 'consistency_flag' not in columns:
-            await conn.execute(text(
-                "ALTER TABLE tracks ADD COLUMN consistency_flag VARCHAR"
-            ))
-            logger.info("Added consistency_flag column to tracks table")
+    for migration in migrations:
+        name = migration["name"]
+        if name in applied:
+            continue
 
-    except Exception as e:
-        logger.warning(f"Migration check failed (may be normal) [{type(e).__name__}]: {e}")
+        if migration["already_applied"]:
+            await _record_migration(conn, name)
+            logger.info(f"Marked existing migration as applied: {name}")
+            continue
+
+        try:
+            async with conn.begin_nested():
+                await conn.execute(text(migration["sql"]))
+                await _record_migration(conn, name)
+            logger.info(migration["log"])
+        except Exception as exc:
+            raise RuntimeError(f"Migration failed [{name}]: {exc}") from exc
 
 
 async def clear_all_tracks():

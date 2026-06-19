@@ -48,7 +48,7 @@ class Track(Base):
     match_source = Column(String, nullable=True)  # "google", "1001tracklists", etc.
     
     # Status tracking
-    status = Column(String, default="pending")  # pending, matched, tagged, error
+    status = Column(String, default="pending", index=True)  # pending, matched, tagged, error
     error_message = Column(Text, nullable=True)
     series_tagged = Column(Boolean, default=False)  # True if tagged via Series page
     
@@ -83,7 +83,7 @@ class MatchCandidate(Base):
     __tablename__ = "match_candidates"
     
     id = Column(Integer, primary_key=True, index=True)
-    track_id = Column(Integer, ForeignKey("tracks.id"), nullable=False)
+    track_id = Column(Integer, ForeignKey("tracks.id"), nullable=False, index=True)
     
     # Match info
     title = Column(String, nullable=False)

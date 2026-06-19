@@ -2,6 +2,50 @@
 
 All notable changes to SetList will be documented in this file.
 
+## [1.4.0] - 2026-06-18
+
+### Added
+- **Compare on YouTube (Track Detail)** — a new panel searches YouTube (via
+  `yt-dlp`, no API key/quota) for likely versions of a track so you can audibly
+  A/B against your file.
+  - Play candidates inline; videos whose owners disable embedding show a clean
+    "Watch on YouTube" fallback instead of a player error.
+  - New endpoints: `GET /api/youtube/{track_id}/candidates`,
+    `GET /api/youtube/embed/{video_id}`, `GET /api/youtube/open`.
+- **Version-aware DJ matching** (`backend/services/string_match.py`) — unidecode
+  normalization plus jellyfish Levenshtein + metaphone scoring that understands
+  remixes, edits, bootlegs, and "feat." credits, improving accuracy on obscure
+  tracks.
+- **Fingerprint-weighted, gap-aware auto-accept** — a confident AcoustID match
+  now dominates noisy filename signals, and auto-accept requires a score gap to
+  the runner-up so the wrong version isn't picked.
+- **Settings validation** — Pydantic validators (e.g. `fuzzy_threshold` 0–100,
+  non-negative delays) reject bad settings with a `422` instead of silently
+  accepting them.
+- **Migration safety** — a `schema_migrations` tracking table plus per-migration
+  error handling so a failed migration surfaces at startup instead of being
+  swallowed.
+- **Database indexes** on `Track.status` and `MatchCandidate.track_id`
+  (idempotent `CREATE INDEX IF NOT EXISTS` for existing databases).
+- **Test harness** — `pytest` smoke suite covering string matching, matcher
+  scoring, migrations, and settings validation.
+
+### Changed
+- App version bumped to **1.4.0** across `backend/main.py`,
+  `frontend/package.json`, `tauri.conf.json`, and `Cargo.toml`.
+- Tauri CSP now allows framing the local backend embed page
+  (`frame-src http://127.0.0.1:5050`).
+- `run.py` reinstalls Python dependencies when `requirements.txt` changes
+  (SHA256 sentinel), so existing testers pick up new packages on upgrade.
+
+### Fixed
+- **YouTube embeds in the packaged app** no longer fail with "Error 153" — the
+  player is hosted from a local backend page so the referrer is a valid
+  `127.0.0.1` origin.
+- **"Watch on YouTube" / "Open" buttons** now reliably open in the system
+  browser (single tab) via a same-origin backend call, instead of doing nothing
+  inside the Tauri webview.
+
 ## [1.3.0-beta] - 2026-06-07
 
 ### Added

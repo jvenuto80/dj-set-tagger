@@ -10,6 +10,7 @@ import subprocess
 import sys
 import os
 import time
+import hashlib
 import webbrowser
 import signal
 import platform
@@ -57,11 +58,38 @@ def setup_venv():
         log("Creating virtual environment...")
         subprocess.run([sys.executable, "-m", "venv", VENV_DIR], check=True)
     
-    # Check if deps are installed
-    result = subprocess.run([pip, "show", "fastapi"], capture_output=True)
-    if result.returncode != 0:
+    # (Re)install deps when requirements.txt changes. A hash sentinel ensures
+    # that upgrades which add new dependencies (e.g. yt-dlp, jellyfish) get
+    # installed into an existing venv instead of being silently skipped.
+    requirements_path = os.path.join(BACKEND_DIR, "requirements.txt")
+    stamp_path = os.path.join(VENV_DIR, ".requirements.sha256")
+
+    def _requirements_hash():
+        try:
+            with open(requirements_path, "rb") as f:
+                return hashlib.sha256(f.read()).hexdigest()
+        except OSError:
+            return ""
+
+    current_hash = _requirements_hash()
+    previous_hash = ""
+    if os.path.exists(stamp_path):
+        try:
+            with open(stamp_path) as f:
+                previous_hash = f.read().strip()
+        except OSError:
+            previous_hash = ""
+
+    fastapi_present = subprocess.run([pip, "show", "fastapi"], capture_output=True).returncode == 0
+
+    if not fastapi_present or current_hash != previous_hash:
         log("Installing Python dependencies...")
-        subprocess.run([pip, "install", "-r", os.path.join(BACKEND_DIR, "requirements.txt")], check=True)
+        subprocess.run([pip, "install", "-r", requirements_path], check=True)
+        try:
+            with open(stamp_path, "w") as f:
+                f.write(current_hash)
+        except OSError:
+            pass
     else:
         log("Python dependencies ✓")
     

@@ -18,7 +18,8 @@ import {
   RefreshCw,
   Play,
   Pause,
-  Fingerprint
+  Fingerprint,
+  Youtube
 } from 'lucide-react'
 import { 
   getTrack, 
@@ -31,7 +32,9 @@ import {
   searchCoverArt,
   updateTrackCover,
   identifyTrack,
-  applyIdentification
+  applyIdentification,
+  getYouTubeCandidates,
+  API_BASE
 } from '../api'
 import ProgressButton from '../components/ProgressButton'
 import AudioPlayer from '../components/AudioPlayer'
@@ -113,6 +116,134 @@ function MatchCard({ match, isSelected, onSelect }) {
           })()} <ExternalLink className="w-3 h-3" />
         </a>
       )}
+    </div>
+  )
+}
+
+function openExternalUrl(url) {
+  if (!url) return
+  if (window.__TAURI_INTERNALS__) {
+    import('@tauri-apps/plugin-shell')
+      .then(({ open }) => open(url))
+      .catch(() => { try { window.open(url, '_blank') } catch (_) {} })
+  } else {
+    try { window.open(url, '_blank') } catch (_) {}
+  }
+}
+
+function YouTubeCandidates({ trackId }) {
+  const [enabled, setEnabled] = useState(false)
+  const [activeId, setActiveId] = useState(null)
+
+  useEffect(() => {
+    function onMessage(event) {
+      const d = event?.data
+      if (d && d.type === 'setlist-open-external' && d.url) {
+        openExternalUrl(d.url)
+      }
+    }
+    window.addEventListener('message', onMessage)
+    return () => window.removeEventListener('message', onMessage)
+  }, [])
+
+  const { data, isFetching, refetch } = useQuery({
+    queryKey: ['youtube', trackId],
+    queryFn: () => getYouTubeCandidates(trackId),
+    enabled,
+    staleTime: 5 * 60 * 1000,
+  })
+
+  const candidates = data?.candidates || []
+  const unavailable = data?.available === false
+
+  return (
+    <div className="mt-6 border-t border-gray-700 pt-4">
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <Youtube className="w-5 h-5 text-red-500" />
+          <h3 className="font-semibold">Compare on YouTube</h3>
+        </div>
+        <button
+          onClick={() => { setEnabled(true); refetch() }}
+          disabled={isFetching}
+          className="px-3 py-1.5 text-sm bg-gray-700 hover:bg-gray-600 rounded flex items-center gap-2 disabled:opacity-50"
+        >
+          {isFetching ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+          {enabled ? 'Refresh' : 'Find videos'}
+        </button>
+      </div>
+
+      {!enabled && (
+        <p className="text-sm text-gray-500">
+          Search YouTube for possible versions of this track to listen and compare.
+        </p>
+      )}
+
+      {unavailable && (
+        <p className="text-sm text-yellow-400">
+          YouTube search is unavailable (yt-dlp is not installed on the backend).
+        </p>
+      )}
+
+      {data?.query && (
+        <p className="text-xs text-gray-500 mb-3">Search: &ldquo;{data.query}&rdquo;</p>
+      )}
+
+      {enabled && !isFetching && !unavailable && candidates.length === 0 && (
+        <p className="text-sm text-gray-400">No YouTube videos found.</p>
+      )}
+
+      <div className="space-y-3">
+        {candidates.map((video) => (
+          <div key={video.id} className="border border-gray-700 rounded-lg overflow-hidden bg-gray-900/40">
+            {activeId === video.id ? (
+              <div className="aspect-video w-full bg-black">
+                <iframe
+                  className="w-full h-full"
+                  src={`${API_BASE}/youtube/embed/${video.id}?autoplay=1`}
+                  title={video.title || 'YouTube video'}
+                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                  allowFullScreen
+                />
+              </div>
+            ) : (
+              <button
+                onClick={() => setActiveId(video.id)}
+                className="relative w-full block group"
+                title="Play inline"
+              >
+                {video.thumbnail ? (
+                  <img src={video.thumbnail} alt="" className="w-full aspect-video object-cover" />
+                ) : (
+                  <div className="w-full aspect-video bg-gray-800" />
+                )}
+                <div className="absolute inset-0 flex items-center justify-center bg-black/30 group-hover:bg-black/40 transition-colors">
+                  <Play className="w-12 h-12 text-white drop-shadow" />
+                </div>
+              </button>
+            )}
+            <div className="p-3 flex items-start gap-3">
+              <div className="flex-1 min-w-0">
+                <p className="font-medium text-sm truncate" title={video.title}>{video.title}</p>
+                <p className="text-xs text-gray-400 truncate">
+                  {video.uploader || 'Unknown channel'}
+                  {video.duration ? ` · ${formatDuration(video.duration)}` : ''}
+                  {video.view_count ? ` · ${video.view_count.toLocaleString()} views` : ''}
+                </p>
+              </div>
+              <a
+                href={video.url}
+                onClick={(e) => { e.preventDefault(); openExternalUrl(video.url) }}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-xs text-primary-400 hover:text-primary-300 flex items-center gap-1 shrink-0"
+              >
+                Open <ExternalLink className="w-3 h-3" />
+              </a>
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   )
 }
@@ -628,6 +759,8 @@ function TrackDetail() {
                 No matches found. Try searching again or edit the metadata manually.
               </p>
             )}
+
+            <YouTubeCandidates trackId={id} />
           </div>
         </div>
 

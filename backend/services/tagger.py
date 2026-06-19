@@ -350,17 +350,32 @@ class AudioTagger:
             except ID3NoHeaderError:
                 audio = ID3()
             
-            # Set tags
-            if title:
-                audio['TIT2'] = TIT2(encoding=3, text=title)
-            if artist:
-                audio['TPE1'] = TPE1(encoding=3, text=artist)
-            if album:
-                audio['TALB'] = TALB(encoding=3, text=album)
-            if genre:
-                audio['TCON'] = TCON(encoding=3, text=genre)
-            if year:
-                audio['TDRC'] = TDRC(encoding=3, text=str(year))
+            # Set tags. None = leave unchanged, "" = delete the frame.
+            if title is not None:
+                if title:
+                    audio['TIT2'] = TIT2(encoding=3, text=title)
+                else:
+                    audio.delall('TIT2')
+            if artist is not None:
+                if artist:
+                    audio['TPE1'] = TPE1(encoding=3, text=artist)
+                else:
+                    audio.delall('TPE1')
+            if album is not None:
+                if album:
+                    audio['TALB'] = TALB(encoding=3, text=album)
+                else:
+                    audio.delall('TALB')
+            if genre is not None:
+                if genre:
+                    audio['TCON'] = TCON(encoding=3, text=genre)
+                else:
+                    audio.delall('TCON')
+            if year is not None:
+                if year:
+                    audio['TDRC'] = TDRC(encoding=3, text=str(year))
+                else:
+                    audio.delall('TDRC')
             
             # Set cover art
             if cover_data:
@@ -393,17 +408,33 @@ class AudioTagger:
         try:
             audio = FLAC(filepath)
             
-            # Set tags (use lists for Vorbis comment consistency)
-            if title:
-                audio['TITLE'] = [title]
-            if artist:
-                audio['ARTIST'] = [artist]
-            if album:
-                audio['ALBUM'] = [album]
-            if genre:
-                audio['GENRE'] = [genre]
-            if year:
-                audio['DATE'] = [str(year)]
+            # Set tags (use lists for Vorbis comment consistency).
+            # None = leave unchanged, "" = delete the field.
+            if title is not None:
+                if title:
+                    audio['TITLE'] = [title]
+                elif 'TITLE' in audio:
+                    del audio['TITLE']
+            if artist is not None:
+                if artist:
+                    audio['ARTIST'] = [artist]
+                elif 'ARTIST' in audio:
+                    del audio['ARTIST']
+            if album is not None:
+                if album:
+                    audio['ALBUM'] = [album]
+                elif 'ALBUM' in audio:
+                    del audio['ALBUM']
+            if genre is not None:
+                if genre:
+                    audio['GENRE'] = [genre]
+                elif 'GENRE' in audio:
+                    del audio['GENRE']
+            if year is not None:
+                if year:
+                    audio['DATE'] = [str(year)]
+                elif 'DATE' in audio:
+                    del audio['DATE']
             
             # Set cover art
             if cover_data:
@@ -444,17 +475,33 @@ class AudioTagger:
         try:
             audio = MP4(filepath)
             
-            # Set tags using iTunes tags
-            if title:
-                audio['\xa9nam'] = [title]
-            if artist:
-                audio['\xa9ART'] = [artist]
-            if album:
-                audio['\xa9alb'] = [album]
-            if genre:
-                audio['\xa9gen'] = [genre]
-            if year:
-                audio['\xa9day'] = [str(year)]
+            # Set tags using iTunes atoms.
+            # None = leave unchanged, "" = delete the atom.
+            if title is not None:
+                if title:
+                    audio['\xa9nam'] = [title]
+                elif '\xa9nam' in audio:
+                    del audio['\xa9nam']
+            if artist is not None:
+                if artist:
+                    audio['\xa9ART'] = [artist]
+                elif '\xa9ART' in audio:
+                    del audio['\xa9ART']
+            if album is not None:
+                if album:
+                    audio['\xa9alb'] = [album]
+                elif '\xa9alb' in audio:
+                    del audio['\xa9alb']
+            if genre is not None:
+                if genre:
+                    audio['\xa9gen'] = [genre]
+                elif '\xa9gen' in audio:
+                    del audio['\xa9gen']
+            if year is not None:
+                if year:
+                    audio['\xa9day'] = [str(year)]
+                elif '\xa9day' in audio:
+                    del audio['\xa9day']
             
             # Set cover art
             if cover_data:
@@ -481,17 +528,32 @@ class AudioTagger:
         try:
             audio = OggVorbis(filepath)
             
-            # Set tags
-            if title:
-                audio['TITLE'] = title
-            if artist:
-                audio['ARTIST'] = artist
-            if album:
-                audio['ALBUM'] = album
-            if genre:
-                audio['GENRE'] = genre
-            if year:
-                audio['DATE'] = str(year)
+            # Set tags. None = leave unchanged, "" = delete the field.
+            if title is not None:
+                if title:
+                    audio['TITLE'] = title
+                elif 'TITLE' in audio:
+                    del audio['TITLE']
+            if artist is not None:
+                if artist:
+                    audio['ARTIST'] = artist
+                elif 'ARTIST' in audio:
+                    del audio['ARTIST']
+            if album is not None:
+                if album:
+                    audio['ALBUM'] = album
+                elif 'ALBUM' in audio:
+                    del audio['ALBUM']
+            if genre is not None:
+                if genre:
+                    audio['GENRE'] = genre
+                elif 'GENRE' in audio:
+                    del audio['GENRE']
+            if year is not None:
+                if year:
+                    audio['DATE'] = str(year)
+                elif 'DATE' in audio:
+                    del audio['DATE']
             
             # Note: OGG cover art is more complex, skipping for now
             # Would need to embed as METADATA_BLOCK_PICTURE

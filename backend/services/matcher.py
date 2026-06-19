@@ -10,6 +10,7 @@ from sqlalchemy import select
 from backend.services.database import get_db
 from backend.services.tracklists_api import search_1001tracklists, get_tracklist_details
 from backend.services.google_search import search_tracklists_google
+from backend.services import string_match as sm
 from backend.models.track import Track, MatchCandidate
 from backend.config import settings
 from loguru import logger
@@ -20,6 +21,10 @@ class TrackMatcher:
     
     def __init__(self):
         self.threshold = settings.fuzzy_threshold
+        # Minimum confidence gap between the best and second-best candidate
+        # required to auto-accept (gap-aware ranking - avoids auto-accepting
+        # when two candidates are nearly tied).
+        self.auto_accept_gap = 8.0
     
     def clean_string(self, s: str) -> str:
         """Clean string for better matching"""
@@ -91,42 +96,75 @@ class TrackMatcher:
         self,
         track: Track,
         candidate: Dict,
-        match_type: str = "fuzzy"
+        match_type: str = "fuzzy",
+        acoustid_identity: Optional[Dict] = None,
     ) -> float:
         """Calculate a match confidence score between a track and a candidate"""
-        scores = []
-        
-        track_artist = self.clean_string(track.artist or "")
-        track_title = self.clean_string(track.title or track.filename)
-        
-        candidate_title = self.clean_string(candidate.get("title", ""))
-        candidate_artist = self.clean_string(candidate.get("artist") or candidate.get("dj") or "")
-        
-        # Title match
-        if track_title and candidate_title:
-            title_score = fuzz.token_set_ratio(track_title, candidate_title)
-            scores.append(("title", title_score, 0.5))  # 50% weight
-        
-        # Artist match (if available)
-        if track_artist and candidate_artist:
-            artist_score = fuzz.token_set_ratio(track_artist, candidate_artist)
-            scores.append(("artist", artist_score, 0.3))  # 30% weight
-        
-        # Full name match (filename vs full title)
-        track_full = self.clean_string(track.filename)
-        candidate_full = self.clean_string(candidate.get("full_title", candidate.get("title", "")))
-        if track_full and candidate_full:
-            full_score = fuzz.token_set_ratio(track_full, candidate_full)
-            scores.append(("full", full_score, 0.2))  # 20% weight
-        
-        # Calculate weighted average
+        return self._score_candidate(track, candidate, acoustid_identity)
+
+    def _score_candidate(
+        self,
+        track: Track,
+        candidate: Dict,
+        acoustid_identity: Optional[Dict] = None,
+    ) -> float:
+        """
+        Weighted match score (0-100) using version-aware string matching.
+
+        Unlike token_set_ratio, the title comparison keeps remix/version
+        descriptors significant, so an "Original Mix" no longer scores 100
+        against a "Remix". When a confident AcoustID fingerprint identity is
+        supplied, agreement with it becomes the dominant signal.
+        """
+        scores: List[Tuple[str, float, float]] = []
+
+        track_title = track.title or track.filename or ""
+        track_artist = track.artist or ""
+        track_full = track.filename or ""
+
+        cand_title = candidate.get("title", "") or ""
+        cand_artist = candidate.get("artist") or candidate.get("dj") or ""
+        cand_full = candidate.get("full_title", cand_title) or ""
+
+        # Title match (version-aware)
+        if track_title and cand_title:
+            scores.append(("title", sm.title_similarity(track_title, cand_title), 0.5))
+
+        # Artist match (with phonetic tiebreak)
+        if track_artist and cand_artist:
+            scores.append(("artist", sm.artist_similarity(track_artist, cand_artist), 0.3))
+
+        # Filename vs candidate full title
+        if track_full and cand_full:
+            scores.append(("full", sm.title_similarity(track_full, cand_full), 0.2))
+
+        # Bonus for tracklists that actually contain tracks
+        num_tracks = len(candidate.get("tracks", []))
+        if num_tracks > 0:
+            scores.append(("tracks", min(50 + num_tracks * 2, 70), 0.1))
+
+        # AcoustID agreement - the highest-weight signal when a confident
+        # fingerprint identity exists. Candidates matching the fingerprinted
+        # artist/title are pulled to the top; disagreeing ones are pushed down.
+        if acoustid_identity:
+            ai_title = acoustid_identity.get("title") or ""
+            ai_artist = acoustid_identity.get("artist") or ""
+            ai_score = float(acoustid_identity.get("score") or 0.0)
+            agreement: List[float] = []
+            if ai_title and cand_title:
+                agreement.append(sm.title_similarity(ai_title, cand_title))
+            if ai_artist and cand_artist:
+                agreement.append(sm.artist_similarity(ai_artist, cand_artist))
+            if agreement and ai_score > 0:
+                scores.append(("acoustid", sum(agreement) / len(agreement), 4.0 * ai_score))
+
         if not scores:
             return 0.0
-        
-        total_weight = sum(s[2] for s in scores)
-        weighted_score = sum(s[1] * s[2] for s in scores) / total_weight
-        
-        return weighted_score
+
+        total_weight = sum(w for _, _, w in scores)
+        if total_weight <= 0:
+            return 0.0
+        return sum(value * weight for _, value, weight in scores) / total_weight
     
     async def find_matches_for_track(self, track: Track) -> List[Dict]:
         """Find potential matches for a track using Google search"""
@@ -140,6 +178,17 @@ class TrackMatcher:
         if not search_terms:
             logger.warning(f"No search terms extracted for track {track.id}")
             return matches
+
+        # Audio fingerprint identity (AcoustID). When confident this is the
+        # strongest signal we have for obscure tracks, so it both seeds a
+        # candidate and biases scoring of web results toward agreement with it.
+        acoustid_identity = await self.identify_with_fingerprint(track)
+        if acoustid_identity:
+            logger.info(
+                f"AcoustID identity: {acoustid_identity.get('artist')} - "
+                f"{acoustid_identity.get('title')} "
+                f"(score {acoustid_identity.get('score', 0):.2f})"
+            )
         
         # Build artist and title from search terms
         artist = track.artist or ""
@@ -170,7 +219,7 @@ class TrackMatcher:
             # Process Google results
             for result in google_results:
                 # Calculate match score
-                score = self._calculate_google_result_score(track, result)
+                score = self._calculate_google_result_score(track, result, acoustid_identity)
                 logger.info(f"Match score for '{result.get('title', 'unknown')}' from {result.get('source', 'unknown')}: {score:.1f} (threshold: {self.threshold})")
                 
                 if score >= self.threshold:
@@ -208,7 +257,7 @@ class TrackMatcher:
                                 continue
                             seen_urls.add(url)
                             
-                            score = self.calculate_match_score(track, result)
+                            score = self.calculate_match_score(track, result, acoustid_identity=acoustid_identity)
                             if score >= self.threshold:
                                 matches.append({
                                     **result,
@@ -225,54 +274,67 @@ class TrackMatcher:
             logger.error(f"Error in Google search: {e}")
             # Fall back to 1001tracklists only
             logger.info("Falling back to 1001tracklists search only...")
-            await self._fallback_search(track, search_terms, matches)
+            await self._fallback_search(track, search_terms, matches, acoustid_identity)
+
+        # Seed a candidate directly from a confident AcoustID fingerprint match -
+        # this is how genuinely obscure tracks (absent from tracklist sites) get
+        # identified at all.
+        if acoustid_identity and acoustid_identity.get("score", 0) >= 0.85:
+            matches.append({
+                "title": acoustid_identity.get("title", ""),
+                "artist": acoustid_identity.get("artist", ""),
+                "url": "",
+                "cover_url": "",
+                "source": "acoustid",
+                "tracks": [],
+                "num_tracks": 0,
+                "genre": "",
+                "confidence": min(99.0, float(acoustid_identity["score"]) * 100),
+                "match_type": "acoustid_fingerprint",
+            })
         
         # Sort by confidence
         matches.sort(key=lambda x: x.get("confidence", 0), reverse=True)
         
         return matches[:10]  # Return top 10 matches
     
-    def _calculate_google_result_score(self, track: Track, result: Dict) -> float:
+    async def identify_with_fingerprint(self, track: Track) -> Optional[Dict]:
+        """
+        Look up the track's audio fingerprint via AcoustID.
+
+        Returns a dict with title/artist/score (0-1) when a reasonably confident
+        match is found, else None. Never raises - fingerprinting is best-effort.
+        """
+        try:
+            filepath = getattr(track, "filepath", None)
+            if not filepath:
+                return None
+
+            from backend.api.settings import load_saved_settings
+            from backend.services.fingerprint import identify_with_acoustid
+
+            saved = await load_saved_settings()
+            api_key = (saved or {}).get("acoustid_api_key", "")
+            if not api_key:
+                return None
+
+            result = await identify_with_acoustid(filepath, api_key)
+            if result and result.get("score", 0) >= 0.5:
+                return result
+        except Exception as e:
+            logger.warning(f"AcoustID fingerprint lookup failed: {e}")
+        return None
+
+    def _calculate_google_result_score(
+        self,
+        track: Track,
+        result: Dict,
+        acoustid_identity: Optional[Dict] = None,
+    ) -> float:
         """Calculate match score for a Google search result"""
-        scores = []
-        
-        track_artist = self.clean_string(track.artist or "")
-        track_title = self.clean_string(track.title or track.filename)
-        
-        result_title = self.clean_string(result.get("title", ""))
-        result_artist = self.clean_string(result.get("artist", ""))
-        
-        # Title match
-        if track_title and result_title:
-            title_score = fuzz.token_set_ratio(track_title, result_title)
-            scores.append(("title", title_score, 0.4))
-        
-        # Artist match
-        if track_artist and result_artist:
-            artist_score = fuzz.token_set_ratio(track_artist, result_artist)
-            scores.append(("artist", artist_score, 0.3))
-        
-        # Filename vs full title
-        track_full = self.clean_string(track.filename)
-        if track_full and result_title:
-            full_score = fuzz.token_set_ratio(track_full, result_title)
-            scores.append(("full", full_score, 0.2))
-        
-        # Bonus for having tracks
-        num_tracks = len(result.get("tracks", []))
-        if num_tracks > 0:
-            track_bonus = min(num_tracks * 2, 20)  # Up to 20 bonus points
-            scores.append(("tracks", track_bonus + 50, 0.1))
-        
-        if not scores:
-            return 0.0
-        
-        total_weight = sum(s[2] for s in scores)
-        weighted_score = sum(s[1] * s[2] for s in scores) / total_weight
-        
-        return weighted_score
+        return self._score_candidate(track, result, acoustid_identity)
     
-    async def _fallback_search(self, track: Track, search_terms: List[str], matches: List[Dict]):
+    async def _fallback_search(self, track: Track, search_terms: List[str], matches: List[Dict], acoustid_identity: Optional[Dict] = None):
         """Fallback to 1001tracklists direct search"""
         seen_urls = set(m.get("url", "") for m in matches)
         
@@ -288,7 +350,7 @@ class TrackMatcher:
                         continue
                     seen_urls.add(url)
                     
-                    score = self.calculate_match_score(track, result)
+                    score = self.calculate_match_score(track, result, acoustid_identity=acoustid_identity)
                     logger.debug(f"Match score for {result.get('title', 'unknown')}: {score}")
                     
                     if score >= self.threshold:
@@ -405,9 +467,16 @@ async def find_matches(track_id: int):
                 )
                 db.add(candidate)
             
-            # Auto-select best match if confidence is high enough
+            # Auto-select best match if confidence is high enough.
+            # Gap-aware: don't auto-accept when the runner-up is nearly tied
+            # (ambiguous) - unless the best match is a confident audio
+            # fingerprint, which we trust outright.
             best_match = matches[0]
-            if best_match["confidence"] >= 85:
+            second_conf = matches[1]["confidence"] if len(matches) > 1 else 0.0
+            is_fingerprint = best_match.get("match_type") == "acoustid_fingerprint"
+            gap_ok = len(matches) == 1 or (best_match["confidence"] - second_conf) >= self.auto_accept_gap
+
+            if best_match["confidence"] >= 85 and (gap_ok or is_fingerprint):
                 track.matched_title = best_match.get("title")
                 track.matched_artist = best_match.get("artist") or best_match.get("dj")
                 track.matched_genre = best_match.get("genre")

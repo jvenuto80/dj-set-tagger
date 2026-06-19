@@ -8,7 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 import os
 
-from backend.api import tracks, scan, settings, match, tags, fingerprint, ai, covers, dedup, library
+from backend.api import tracks, scan, settings, match, tags, fingerprint, ai, covers, dedup, library, youtube
 from backend.services.database import init_db
 from backend.config import settings as app_settings
 from loguru import logger
@@ -67,7 +67,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="SetList",
     description="Organize and tag your music library - DJ sets, podcasts, radio shows, and albums",
-    version="1.3.0-beta",
+    version="1.4.0",
     lifespan=lifespan
 )
 
@@ -94,6 +94,7 @@ app.include_router(ai.router, prefix="/api/ai", tags=["ai"])
 app.include_router(covers.router, prefix="/api/covers", tags=["covers"])
 app.include_router(dedup.router, prefix="/api/dedup", tags=["dedup"])
 app.include_router(library.router, prefix="/api/library", tags=["library"])
+app.include_router(youtube.router, prefix="/api/youtube", tags=["youtube"])
 
 
 @app.get("/api/health")
@@ -101,7 +102,7 @@ async def health_check():
     """Health check endpoint"""
     return {
         "status": "healthy",
-        "version": "1.3.0-beta",
+        "version": "1.4.0",
         # Always native now (Docker mode was removed). Kept in the response for
         # backward compatibility with older frontends that still read this key.
         "native": True
@@ -114,7 +115,7 @@ async def api_root():
     return {
         "message": "SetList API",
         "docs": "/docs",
-        "version": "1.3.0-beta"
+        "version": "1.4.0"
     }
 
 # In native mode, serve the frontend from the built dist directory

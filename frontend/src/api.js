@@ -128,6 +128,13 @@ export const searchTracklists = async (query) => {
   return data
 }
 
+export const getYouTubeCandidates = async (trackId, query = null, limit = 6) => {
+  const params = { limit }
+  if (query) params.query = query
+  const { data } = await api.get(`/youtube/${trackId}/candidates`, { params })
+  return data
+}
+
 // Tags
 export const applyTags = async (trackId) => {
   const { data } = await api.post(`/tags/${trackId}/apply`)
